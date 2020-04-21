@@ -65,7 +65,6 @@ class genetate_normal_HMM_observation_sequence:
           plt.show()
 
 
-
 #训练HMM模型
 class HMM:
       #发射矩阵,(T,m)矩阵
@@ -145,6 +144,7 @@ class HMM:
            self.obs=np.array(self.HMM_obs.result,dtype=float)#观察数据
            self.m=self.HMM_obs.states.__len__()#状态数量 牛市、盘震，熊市
            self.T=int(self.HMM_obs.T)#时间长度
+           self.V=np.zeros((self.T,self.m)) #viterbi算法的viterbi矩阵
 
            #EM中需要训练的参数
            self.pra_EM=list(zip(mean_js,var_js)).copy()#EM中需要训练的参数3,4 正态分布的mean和var
@@ -195,7 +195,7 @@ class HMM:
           self.init_Epsilon()
 
       #判断是否收敛，跳出EM训练
-      def convergence(self,rato_err=0.0001):
+      def convergence(self,rato_err=0.001):
           #new-old 列
           aij_l=tf.reshape(self.aij_EM,(-1,1))-tf.reshape(self.aij,(-1,1))
           pi_l=tf.reshape(self.pi_EM,(-1,1))-tf.reshape(self.pi,(-1,1))
@@ -251,7 +251,7 @@ class HMM:
                   print("样本跳转频率:",self.HMM_obs.aij_sample)
                   print("样本分布频率：",self.HMM_obs.pi_sample)
                   print("样本序列初始状体:",self.HMM_obs.record_state[0])
-                  exit()
+                  break
               self.init_again()
               self.scale=self.scale
               #输出结果检验
@@ -260,6 +260,47 @@ class HMM:
               print("mean,var:",list(self.HMM_obs.pra))
               print("aij:",list(self.aij))
               print("--------------------------------")
+
+      #通过x1.。。xT发现最有可能的c1.。。cT，通过股价发现潜在最可能的熊市和牛市的概率
+      def Viterbi(self,):
+         #初始化viterbi的v矩阵
+         for t in range(self.T):
+             for j in range(self.m):
+                 if t==0:
+                    self.V[0,:]=tf.multiply(tf.reshape(self.P[0,:],(-1,)),tf.reshape(self.pi,(-1,)))
+                 else:
+                    self.V[t,j]=0.0
+                    for i in range(self.m):
+                        if self.V[t,j]<self.V[t-1,i]*self.aij[i,j]:
+                           self.V[t,j]=self.V[t-1,i]*self.aij[i,j]
+                    self.V[t,j]=self.V[t,j]*self.P[t,j]
+
+         #根据v矩阵求解最有可能的c1......cT
+         most_pro_ct=[]
+         st=0#上一个t最大的v（st）（t）所在的状态
+         for t in range(self.T-1):
+             if t==0:
+                st=list(self.V[self.T-1-t,:]).index(np.max(list(self.V[self.T-1-t,:])))
+                most_pro_ct.append(st)
+             else:
+                max=0
+                st_now=0
+                for  i in range(self.m):
+                     if max<self.V[t-1,i]*self.aij[i,st]:
+                        st_now=i
+                        max=self.V[t-1,i]*self.aij[i,st]
+                most_pro_ct.append(st_now)
+                st=st_now
+         most_pro_ct.reverse()#反转list
+         #计算预测样本隐藏状态与实际样本隐藏状态的差异：ct
+         temp=list(self.HMM_obs.record_state[:-1])
+         right_num=0#记录有多少是正确匹配的
+         for e in range(temp.__len__()):
+             if temp[e]==most_pro_ct[e]:
+                right_num=right_num+1
+         print(right_num)
+         print(float(right_num/temp.__len__()))
+
 # class sharedate:
 #       def __init__(self,nameshare='002253',start='2019-02-10',end='2020-04-19'):
 #           e = ts.get_hist_data('002253',start=start,end=end)
@@ -269,7 +310,8 @@ class HMM:
 HMM_observation=genetate_normal_HMM_observation_sequence([50.0,47.0],[1.5,1.8],200,[0.5,0.5],[[0.7,0.3],[0.6,0.4]])
 HMM_observation.genetate()
 # HMM_observation.paint()
-b=HMM(HMM_observation,mean_js=[52.0,45.0],var_js=[1.2,2.3],pi_js=[0.3,0.7],aij_js=[[0.5,0.5],[0.5,0.5]]
-      ,scale=14.095)
+b=HMM(HMM_observation,mean_js=[51.0,46.0],var_js=[1.2,2.3],pi_js=[0.3,0.7],aij_js=[[0.5,0.5],[0.5,0.5]]
+      ,scale=12.00576)
 b.EM()
+b.Viterbi()
 print("over")
