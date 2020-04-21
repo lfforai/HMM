@@ -17,6 +17,22 @@ class genetate_normal_HMM_observation_sequence:
           self.N=self.pi.__len__()
           self.states=range(self.N)#转移状态
           self.result=[]
+          self.record_state=[] #记录样本的状态跳转序列
+          self.aij_sample=np.zeros((self.N,self.N))#由样本状态序列生成的频率跳转矩阵
+          self.pi_sample=np.zeros((self.N))#样本的概率分布频率分布
+
+      #计算生成样本的跳转概率矩阵aij
+      def statistic_staterecords(self):
+          len=self.record_state.__len__()
+          for t in range(len-1):
+              self.aij_sample[int(self.record_state[t]),int(self.record_state[t+1])]=self.aij_sample[int(self.record_state[t]),int(self.record_state[t+1])]+1
+          aij_l=tf.reshape(tf.reduce_sum(tf.cast(self.aij_sample,dtype=tf.float32),axis=1),(-1,1))#列相加
+          self.aij_sample=(tf.cast(self.aij_sample,tf.float32)/aij_l).numpy()
+          for t in range(len):
+              self.pi_sample[int(self.record_state[t])]=self.pi_sample[int(self.record_state[t])]+1
+          pi_sum=tf.reduce_sum(self.pi_sample)
+          self.pi_sample=self.pi_sample/pi_sum
+
 
       #生成观察数据
       def genetate(self):
@@ -27,12 +43,15 @@ class genetate_normal_HMM_observation_sequence:
                  state_now=np.random.choice(a=self.states,p=self.pi) #初始分布
                  result.append(tf.random.normal((1,),self.pra[int(state_now)][0],self.pra[int(state_now)][1]).numpy()[0])
                  state_next=np.random.choice(a=self.states,p=self.aij[int(state_now),:])
+                 self.record_state.append(state_now)
                  i=1
               else:#
                  state_now=state_next
+                 self.record_state.append(state_now)
                  result.append(tf.random.normal((1,),self.pra[int(state_now)][0],self.pra[int(state_now)][1]).numpy()[0])
                  state_next=np.random.choice(a=self.states,p=self.aij[int(state_now),:])
           self.result=result
+          self.statistic_staterecords()
           return result
 
       #画出时许图像
@@ -45,19 +64,17 @@ class genetate_normal_HMM_observation_sequence:
           plt.plot(x,y)
           plt.show()
 
-#生成HMM观察数据
-HMM_observation=genetate_normal_HMM_observation_sequence([50.0,47.0],[1.5,1.8],200,[0.6667,0.3333],[[0.7,0.3],[0.6,0.4]])
-HMM_observation.genetate()
-HMM_observation.paint()
+
 
 #训练HMM模型
 class HMM:
       #发射矩阵,(T,m)矩阵
       def  init_P(self,fact=22):
+           matrix=np.array(self.HMM_obs.pra)
            for t in range(self.T):
                for j in range(self.m):
-                   mean=tf.cast(self.HMM_obs.pra[j][0],tf.float32)
-                   var=tf.cast(self.HMM_obs.pra[j][1],tf.float32)
+                   mean=tf.cast(matrix[j,0],tf.float32)
+                   var=tf.cast(matrix[j,1],tf.float32)
                    #正态分布模拟
                    self.P[t,j]=(tf.exp(-1.0*np.power(self.obs[t]-mean,2.0)/(2.0*var))/(tf.math.sqrt(2.0*var*3.1415926))).numpy()
            self.P=np.array(self.P)*fact
@@ -117,7 +134,7 @@ class HMM:
                   for t in range(self.T-1):
                       self.Epsilon[i,j,t]=self.Alpha[t,i]*self.aij[i,j]*self.P[t+1,j]*self.Beta[t+1,j]/self.L
 
-      def  __init__(self,HMM_observation_o=HMM_observation,\
+      def  __init__(self,HMM_observation_o=[],\
                     mean_js=[],var_js=[],pi_js=[],aij_js=[]
                     ,scale=1.0):
            #初始化状态、转移矩阵、观测值，时间周期等参数
@@ -177,6 +194,27 @@ class HMM:
           self.init_Gamma()
           self.init_Epsilon()
 
+      #判断是否收敛，跳出EM训练
+      def convergence(self,rato_err=0.0001):
+          #new-old 列
+          aij_l=tf.reshape(self.aij_EM,(-1,1))-tf.reshape(self.aij,(-1,1))
+          pi_l=tf.reshape(self.pi_EM,(-1,1))-tf.reshape(self.pi,(-1,1))
+          pra_l=tf.reshape(tf.cast(list(self.pra_EM),dtype=tf.float32),(-1,1))-tf.reshape(tf.cast(list(self.HMM_obs.pra),dtype=tf.float32),(-1,1))
+
+          #new-old 行
+          aij_h=tf.reshape(aij_l,(1,-1))
+          pi_h=tf.reshape(pi_l,(1,-1))
+          pra_h=tf.reshape(pra_l,(1,-1))
+
+          #计算精度
+          a=(tf.math.sqrt((tf.matmul(aij_h,aij_l)))).numpy()[0][0]
+          b=(tf.math.sqrt((tf.matmul(pi_h,pi_l)))).numpy()[0][0]
+          c=(tf.math.sqrt((tf.matmul(pra_h,pra_l)))).numpy()[0][0]
+
+          if a+b+c<rato_err:
+             return True
+          else:
+             return False
 
       def EM(self,itera_num=500):
           index=0
@@ -194,14 +232,26 @@ class HMM:
               #新mean
               g_all=tf.reduce_sum(self.Gamma,axis=1).numpy()#从1到T
               u_new=tf.cast(tf.reshape(tf.matmul(self.Gamma,tf.reshape(self.obs,(-1,1))),(-1,))/g_all,dtype=tf.float32).numpy()
+              #新var
               var_list=[]
               for i in range(self.m):
                   x_T=tf.reshape(tf.cast(self.obs,dtype=tf.float32)-u_new[i],(-1,1))#列向量
                   x=tf.reshape(tf.cast(self.obs,dtype=tf.float32)-u_new[i],(1,-1))#行向量
                   w=tf.cast(tf.linalg.diag(tf.reshape(self.Gamma[i,:],(-1,))),dtype=tf.float32)
-                  var_list.append(tf.cast(tf.matmul(x,tf.matmul(w,x_T))[0]/g_all[i],dtype=tf.float32).numpy())
-              self.pra_EM=zip(list(u_new),var_list)
+                  var_list.append((tf.cast(tf.matmul(x,tf.matmul(w,x_T))[0]/g_all[i],dtype=tf.float32).numpy())[0])
+              self.pra_EM=np.array(list(zip(u_new,var_list)),dtype=float)
               index=index+1
+              if  self.convergence()==True:
+                  print("精度符合要求跳出：")
+                  print("极大拟然估计值",self.L)#P和L很容易就非常小，无法继续计算
+                  print("pi:",self.pi)
+                  print("mean,var:",list(self.HMM_obs.pra))
+                  print("aij:",list(self.aij))
+                  print("--------------------------------")
+                  print("样本跳转频率:",self.HMM_obs.aij_sample)
+                  print("样本分布频率：",self.HMM_obs.pi_sample)
+                  print("样本序列初始状体:",self.HMM_obs.record_state[0])
+                  exit()
               self.init_again()
               self.scale=self.scale
               #输出结果检验
@@ -215,6 +265,11 @@ class HMM:
 #           e = ts.get_hist_data('002253',start=start,end=end)
 # a=list(e['close'])
 # print(a)
-b=HMM(HMM_observation,mean_js=[51.0,46.0],var_js=[1.5,1.8],pi_js=[0.3,0.7],aij_js=[[0.5,0.5],[0.3,0.7]]
-      ,scale=10.10)
+#生成HMM观察数据
+HMM_observation=genetate_normal_HMM_observation_sequence([50.0,47.0],[1.5,1.8],200,[0.5,0.5],[[0.7,0.3],[0.6,0.4]])
+HMM_observation.genetate()
+# HMM_observation.paint()
+b=HMM(HMM_observation,mean_js=[52.0,45.0],var_js=[1.2,2.3],pi_js=[0.3,0.7],aij_js=[[0.5,0.5],[0.5,0.5]]
+      ,scale=14.095)
 b.EM()
+print("over")
