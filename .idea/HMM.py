@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 import random
 import matplotlib.pyplot as plt
-import tushare as ts
+# import tushare as ts
 
 #生成HMM观察值
 class genetate_normal_HMM_observation_sequence:
@@ -114,6 +114,7 @@ class HMM:
           self.Beta.reverse()#反转list
           self.Beta=np.array(self.Beta)
 
+      #HMM中的第一个问题计算::P（x1...xT）
       def init_L(self,):
           a=tf.reshape(tf.multiply(tf.cast(self.pi,dtype=tf.float32),np.reshape(np.array(self.P[0,:]),(-1))),(1,-1))
           # print(tf.matmul(tf.reshape(self.Alpha[self.T-1,:],(1,-1)),tf.reshape(self.Beta[self.T-1,:],(-1,1))))
@@ -261,6 +262,7 @@ class HMM:
               print("aij:",list(self.aij))
               print("--------------------------------")
 
+      #HMM中的全局解码，HMM中的第二个基本问题
       #通过x1.。。xT发现最有可能的c1.。。cT，通过股价发现潜在最可能的熊市和牛市的概率
       def Viterbi(self,):
          #初始化viterbi的v矩阵
@@ -301,6 +303,31 @@ class HMM:
          print(right_num)
          print(float(right_num/temp.__len__()))
 
+      #预测h次以后的观察值
+      def x_distribution_forecast(self,xt_h,h):
+          #跳转h次的转移概率
+          a=tf.reshape(self.Alpha[self.T-1,:],(1,-1))
+          for i in range(h):
+              a=tf.reshape(tf.matmul(a,self.aij),(1,-1))
+
+          matrix=np.array(self.HMM_obs.pra)
+          temp_list=[]
+          for j in range(self.m):
+              mean=tf.cast(matrix[j,0],tf.float32)
+              var=tf.cast(matrix[j,1],tf.float32)
+              #正态分布模拟
+              temp_list.append(tf.exp(-1.0*np.power(xt_h-mean,2.0)/(2.0*var))/(tf.math.sqrt(2.0*var*3.1415926)).numpy())
+          temp_list=tf.reshape(tf.cast(temp_list,tf.float32),(-1,1))
+          #该值会比较小的原因是它在正态分布下是xt_h的概率密度
+          return (tf.matmul(a,temp_list)/self.L).numpy()[0][0]
+
+      #预测h次以后的潜在状态
+      def state_distribution_forecast(self,h):
+          a=tf.reshape(self.Alpha[self.T-1,:],(1,-1))
+          for i in range(h):
+              a=tf.reshape(tf.matmul(a,self.aij),(1,-1))
+          return (tf.reshape(a,(-1,))/self.L).numpy()
+
 # class sharedate:
 #       def __init__(self,nameshare='002253',start='2019-02-10',end='2020-04-19'):
 #           e = ts.get_hist_data('002253',start=start,end=end)
@@ -313,5 +340,6 @@ HMM_observation.genetate()
 b=HMM(HMM_observation,mean_js=[51.0,46.0],var_js=[1.2,2.3],pi_js=[0.3,0.7],aij_js=[[0.5,0.5],[0.5,0.5]]
       ,scale=12.00576)
 b.EM()
-b.Viterbi()
-print("over")
+# b.Viterbi()
+print("T+1时刻的x预测值:",b.x_distribution_forecast(46,1))
+print("T+1时刻的隐藏状态观察值:",b.state_distribution_forecast(1))
