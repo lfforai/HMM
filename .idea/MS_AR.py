@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 #生成HMM观察值
 class MS_AR_observation:
     # pi初始分布，aij跳转概率分布
-    def __init__(self,meanlist=[],stddevlist=[],T=100,pi_o=[],aij=[]):
+    def __init__(self,meanlist=[],stddevlist=[],T=100,pi_o=[],aij=[],beta=0.85):
         self.meanlist=meanlist
         self.stddevlist=stddevlist
         self.pra=list(zip(self.meanlist,self.stddevlist))
@@ -20,6 +20,7 @@ class MS_AR_observation:
         self.record_state=[] #记录样本的状态跳转序列
         self.aij_sample=np.zeros((self.N,self.N))#由样本状态序列生成的频率跳转矩阵
         self.pi_sample=np.zeros((self.N))#样本的概率分布频率分布
+        self.beta=beta
 
     #计算生成样本的跳转概率矩阵aij
     def statistic_staterecords(self):
@@ -45,9 +46,10 @@ class MS_AR_observation:
                 self.record_state.append(state_now)
                 i=1
             else:#
+                state_last=state_now
                 state_now=state_next
                 self.record_state.append(state_now)
-                result.append(tf.random.normal((1,),self.pra[int(state_now)][0],self.pra[int(state_now)][1]).numpy()[0])
+                result.append(tf.random.normal((1,),self.pra[int(state_now)][0]+self.beta*(result[-1]-self.pra[int(state_last)][0]),self.pra[int(state_now)][1]).numpy()[0])
                 state_next=np.random.choice(a=self.states,p=self.aij[int(state_now),:])
         self.result=result
         self.statistic_staterecords()
@@ -63,8 +65,9 @@ class MS_AR_observation:
         plt.plot(x,y)
         plt.show()
 
-HMM_observation=MS_AR_observation([50.0,47.0],[1.5,1.8],200,[0.5,0.5],[[0.7,0.3],[0.6,0.4]])
+HMM_observation=MS_AR_observation([50.0,47.0],[1.5,1.8],200,[0.5,0.5],[[0.7,0.3],[0.6,0.4]],0.85)
 HMM_observation.genetate()
+HMM_observation.paint()
 
 #由于需要对pi,aij，正态分布mean，var，衰减系数beta等参数进行反向传导所以必须定义为tf.variable
 #自己定义loss函数
@@ -73,28 +76,44 @@ class selfLoss(tf.keras.losses.Loss):
         super(selfLoss,self).__init__()
 
     def __call__(self,y_true,y_pred):
-        return y_pred
+        return tf.cast(y_pred,tf.float32)
 
-class MS_AR(tf.keras.Model):
-      def __init__(self,mean=[52.0,48.0],var=[1.5,1.8],pi=np.array([0.5,0.5]),aij=np.array([[0.3,0.7],[0.5,0.5]]),MS_AR_obs=HMM_observation,**kwargs):
+@tf.custom_gradient #自定义反向梯度，这里没有用到
+def log1pexp(x):
+    e = tf.exp(x)
+    def grad(dy):
+        return dy*(1-1/(1+e))
+    return tf.math.log(1+e),grad
+
+class MS_AR():
+      def __init__(self,mean=[52.0,48.0],var=[1.2,2.1],beta=0.65,pi=np.array([0.3,0.7]),MS_AR_obs=HMM_observation,**kwargs):
           super(MS_AR, self).__init__(**kwargs)
+          self.HMM_obs=MS_AR_obs #样本统计信息
           self.obs=np.array([0.0]+MS_AR_obs.result)
           self.obs_2_T=self.obs[1:] #从2-T
           self.obs_1_T_1=self.obs[:-1] #从1-T-1
           self.m=pi.__len__() #state的维度
           self.T=MS_AR_obs.T #观察值的数量
-          self.optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3)
+          self.optimizer=tf.keras.optimizers.Adam(learning_rate=1.0e-2)
           self.mse_loss_fn=selfLoss()
 
           #需要训练的参数,都是可以训练的
           self.mean=tf.Variable(mean,dtype=tf.float32)
           self.var=tf.Variable(var,dtype=tf.float32)
-          self.bate=tf.Variable(0.85,dtype=tf.float32)
-          self.aij=tf.Variable(aij,dtype=tf.float32)
-          self.pi=tf.Variable(pi,dtype=tf.float32)
+          self.b=tf.Variable(1.0,dtype=tf.float32)
+          self.q=tf.Variable(np.log(pi[1]/(1-pi[1])),dtype=tf.float32)
+          self.p=tf.Variable(np.log(pi[0]/(1-pi[0])),dtype=tf.float32)
+
+          #由训练变量生成的中间变量，由约束条件变为非约束条件
+          self.bate=0.0#=b/(1+b)，时序衰减指数
+          self.p_exp=0.0#跳转概率
+          self.q_exp=0.0#跳转概率
+          self.aij=0.0#调整矩阵这里固定为2*2
+          self.pi=0.0#稳定下的马尔科夫初始状态
+          self.trainableweihts=[self.mean,self.var,self.b,self.p,self.q]
 
           #中间变量
-          self.  Eta=tf.zeros((self.m,self.m,self.T))   #AR(1)的正态分布概率矩阵,观测值在同状态下的概率和前一个观察者有关
+          self.Eta=tf.zeros((self.m,self.m,self.T))   #AR(1)的正态分布概率矩阵,观测值在同状态下的概率和前一个观察者有关
           self.Gamma=tf.zeros((self.T,self.m,self.m))
           self.Epsilon=tf.zeros((self.T,self.m))
 
@@ -110,6 +129,17 @@ class MS_AR(tf.keras.Model):
                   else:
                       self.Eta=tf.concat([self.Eta,tf.cast(tf.exp(-1.0*(self.obs_2_T-(self.mean[j]+self.bate*(self.obs_1_T_1-self.mean[i])))/(2.0*self.var[j]))/tf.sqrt(3.1415926*2.0*self.var[j]),dtype=tf.float32)],axis=0)
           self.Eta=tf.reshape(self.Eta,(self.m,self.m,self.T))
+
+      def init_frist(self):
+          self.bate=self.b/(1.0+tf.abs(self.b))
+          self.p_exp=tf.exp(self.p)/(1.0+tf.exp(self.p))
+          self.q_exp=tf.exp(self.q)/(1.0+tf.exp(self.q))
+          self.pi=tf.reshape(tf.concat([tf.reshape((1.0-self.q_exp)/(2.0-self.q_exp-self.p_exp),(1,-1)),tf.reshape((1.0-self.p_exp)/(2.0-self.p_exp-self.q_exp),(1,-1))],axis=0),(-1,))
+          self.aij=self.p_exp
+          self.aij=tf.concat([tf.reshape(self.aij,(-1,)),tf.reshape(1.0-self.p_exp,(-1,))],axis=0)
+          self.aij=tf.concat([tf.reshape(self.aij,(-1,)),tf.reshape(1.0-self.q_exp,(-1,))],axis=0)
+          self.aij=tf.concat([self.aij,tf.reshape(self.q_exp,(-1,))],axis=0)
+          self.aij=tf.reshape(self.aij,(self.m,self.m))
 
       #计算r_i_j(t)
       def init_Gamma(self):
@@ -183,27 +213,35 @@ class MS_AR(tf.keras.Model):
           # print(self.Gamma)
 
       #EM方法训练
-      def __call__(self,iter=1):
+      def __call__(self,iter=100):
+          print("样本跳转频率:",self.HMM_obs.aij_sample)
+          print("样本分布频率：",self.HMM_obs.pi_sample)
+          print("样本序列初始状体:",self.HMM_obs.record_state[0])
           # self.Gamma=tf.zeros((self.T,self.m,self.m))
           # self.Eta=tf.zeros((self.m,self.m,self.T))
           i=0
           while(i<iter):
-              print('trainable_weights::', self.trainable_weights)
-              loss=tf.constant(0.0,dtype=tf.float32)
-              for t in range(self.T):
-                  loss=loss+tf.matmul(tf.reshape(self.Gamma[t,:,:],(1,-1)),tf.reshape(self.Eta[:,:,t],(-1,1)))
-              loss=loss[0][0]
-              print("向前传导loss成功::",loss)
               with tf.GradientTape() as tape:
-                   loss=self.mse_loss_fn(np.ones(1),loss)
-              grads = tape.gradient(loss, self.trainable_weights)
-              print("向后传导loss失败grads::",list(grads))
+                   self.init_frist()
+                   self.init_Eta()
+                   self.init_Gamma()
+                   loss=tf.constant(0.0,dtype=tf.float32)
+                   for t in range(self.T):
+                       loss=loss+tf.matmul(tf.reshape(self.Gamma[t,:,:],(1,-1)),tf.reshape(self.Eta[:,:,t],(-1,1)))
+                   loss=-1.0*loss[0][0]
+                   y=self.mse_loss_fn(np.ones(1),loss)/self.T
+              grads = tape.gradient(y,self.trainableweihts)
               #输出为none,因为tensorflow不支持aij[i][j]或者tf.gather_nd和tf.slice等tf.varible局部变量反向传导
               #解决的办法是自己写局部varible向后传导的op
-              self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
+              self.optimizer.apply_gradients(zip(grads, self.trainableweihts))
+              print(loss)
+              print("pi:",self.pi)
+              print("aij:",self.aij)
+              print("mean:",self.mean)
+              print("var:",self.var)
+              print("beta:",self.bate)
+              print("__________________")
               i=i+1
 
 a=MS_AR()
-a.init_Eta()
-a.init_Gamma()
 a()
