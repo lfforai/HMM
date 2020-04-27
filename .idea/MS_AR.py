@@ -227,8 +227,10 @@ class MS_AR():
                    self.init_Gamma()
                    loss=tf.constant(0.0,dtype=tf.float32)
                    for t in range(self.T):
-                       loss=loss+tf.matmul(tf.reshape(self.Gamma[t,:,:],(1,-1)),tf.reshape(self.Eta[:,:,t],(-1,1)))
-                   loss=-1.0*loss[0][0]
+                       for i in range(self.m):
+                            for j in range(self.m):
+                                loss=loss+self.Gamma[t,i,j]*self.Eta[i,j,t]
+                   loss=-1.0*loss
                    y=self.mse_loss_fn(np.ones(1),loss)/self.T
               #计算偏导数
               grads = tape.gradient(y,self.trainableweihts)
