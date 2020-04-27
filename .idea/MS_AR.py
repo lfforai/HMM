@@ -230,9 +230,9 @@ class MS_AR():
                        loss=loss+tf.matmul(tf.reshape(self.Gamma[t,:,:],(1,-1)),tf.reshape(self.Eta[:,:,t],(-1,1)))
                    loss=-1.0*loss[0][0]
                    y=self.mse_loss_fn(np.ones(1),loss)/self.T
+              #计算偏导数
               grads = tape.gradient(y,self.trainableweihts)
-              #输出为none,因为tensorflow不支持aij[i][j]或者tf.gather_nd和tf.slice等tf.varible局部变量反向传导
-              #解决的办法是自己写局部varible向后传导的op
+              #利用偏导进行梯度下降调整
               self.optimizer.apply_gradients(zip(grads, self.trainableweihts))
               print(loss)
               print("pi:",self.pi)
