@@ -86,10 +86,10 @@ def log1pexp(x):
     return tf.math.log(1+e),grad
 
 class MS_AR():
-      def __init__(self,mean=[52.0,48.0],var=[1.2,2.1],beta=0.65,pi=np.array([0.3,0.7]),MS_AR_obs=HMM_observation,**kwargs):
+      def __init__(self,mean=[52.0,48.0],var=[1.2,2.1],beta=0.65,pi=np.array([0.7,0.3]),MS_AR_obs=HMM_observation,**kwargs):
           super(MS_AR, self).__init__(**kwargs)
           self.HMM_obs=MS_AR_obs #样本统计信息
-          self.obs=np.array([0.0]+MS_AR_obs.result)
+          self.obs=np.array([(mean[0]+mean[1])/2.0]+MS_AR_obs.result)
           self.obs_2_T=self.obs[1:] #从2-T
           self.obs_1_T_1=self.obs[:-1] #从1-T-1
           self.m=pi.__len__() #state的维度
@@ -125,16 +125,16 @@ class MS_AR():
                       #self.Eta[i,j,:]=tf.exp(-1.0*(self.obs_2_T-(self.mean[j]+self.bate*(self.obs_1_T_1-self.mean[i])))/(2.0*self.var[j]))/tf.sqrt(3.1415926*2.0*self.var[j])
                       #由于tensorflow是不支持对张量进行局部赋值的，因为这样不是一个tf的标准op操作
                       #无法进行反向传导，所以我们用tf.contact进行变量之间的连接
-                      self.Eta=tf.cast(tf.exp(-1.0*(self.obs_2_T-(self.mean[j]+self.bate*(self.obs_1_T_1-self.mean[i])))/(2.0*self.var[j]))/tf.sqrt(3.1415926*2.0*self.var[j]),dtype=tf.float32)
+                      self.Eta=tf.cast(tf.exp(-1.0*tf.math.pow(self.obs_2_T-(self.mean[j]+self.bate*(self.obs_1_T_1-self.mean[i])),2.0)/(2.0*self.var[j]))/tf.sqrt(3.1415926*2.0*self.var[j]),dtype=tf.float32)
                   else:
-                      self.Eta=tf.concat([self.Eta,tf.cast(tf.exp(-1.0*(self.obs_2_T-(self.mean[j]+self.bate*(self.obs_1_T_1-self.mean[i])))/(2.0*self.var[j]))/tf.sqrt(3.1415926*2.0*self.var[j]),dtype=tf.float32)],axis=0)
+                      self.Eta=tf.concat([self.Eta,tf.cast(tf.exp(-1.0*tf.math.pow(self.obs_2_T-(self.mean[j]+self.bate*(self.obs_1_T_1-self.mean[i])),2.0)/(2.0*self.var[j]))/tf.sqrt(3.1415926*2.0*self.var[j]),dtype=tf.float32)],axis=0)
           self.Eta=tf.reshape(self.Eta,(self.m,self.m,self.T))
 
       def init_frist(self):
           self.bate=self.b/(1.0+tf.abs(self.b))
           self.p_exp=tf.exp(self.p)/(1.0+tf.exp(self.p))
           self.q_exp=tf.exp(self.q)/(1.0+tf.exp(self.q))
-          self.pi=tf.reshape(tf.concat([tf.reshape((1.0-self.q_exp)/(2.0-self.q_exp-self.p_exp),(1,-1)),tf.reshape((1.0-self.p_exp)/(2.0-self.p_exp-self.q_exp),(1,-1))],axis=0),(-1,))
+          self.pi=tf.reshape(tf.concat([tf.reshape((1.0-self.q_exp)/(2.0-self.q_exp-self.p_exp),(1,-1)),tf.reshape((1.0-self.p_exp)/(2.0-self.q_exp-self.p_exp),(1,-1))],axis=0),(-1,))
           self.aij=self.p_exp
           self.aij=tf.concat([tf.reshape(self.aij,(-1,)),tf.reshape(1.0-self.p_exp,(-1,))],axis=0)
           self.aij=tf.concat([tf.reshape(self.aij,(-1,)),tf.reshape(1.0-self.q_exp,(-1,))],axis=0)
@@ -209,8 +209,6 @@ class MS_AR():
                  self.Epsilon=tf.reshape(self.Epsilon,(t+1,self.m))
                  self.Gamma=tf.concat([self.Gamma,tf.reshape(Gammatemp,(-1,))],axis=0)
           self.Gamma=tf.reshape(self.Gamma,(self.T,self.m,self.m))
-          # print(self.Epsilon)
-          # print(self.Gamma)
 
       #EM方法训练
       def __call__(self,iter=100):
@@ -227,9 +225,11 @@ class MS_AR():
                    self.init_Gamma()
                    loss=tf.constant(0.0,dtype=tf.float32)
                    for t in range(self.T):
+                       sum1=tf.constant(0.0,tf.float32)
                        for i in range(self.m):
                             for j in range(self.m):
-                                loss=loss+self.Gamma[t,i,j]*self.Eta[i,j,t]
+                                sum1=sum1+self.Gamma[t,i,j]*self.Eta[i,j,t]
+                       loss=loss+tf.math.log(sum1)
                    loss=-1.0*loss
                    y=self.mse_loss_fn(np.ones(1),loss)/self.T
               #计算偏导数
@@ -237,11 +237,11 @@ class MS_AR():
               #利用偏导进行梯度下降调整
               self.optimizer.apply_gradients(zip(grads, self.trainableweihts))
               print(loss)
-              print("pi:",self.pi)
-              print("aij:",self.aij)
-              print("mean:",self.mean)
-              print("var:",self.var)
-              print("beta:",self.bate)
+              print("pi:",self.pi.numpy())
+              print("aij:",self.aij.numpy())
+              print("mean:",self.mean.numpy())
+              print("var:",self.var.numpy())
+              print("beta:",self.bate.numpy())
               print("__________________")
               i=i+1
 
