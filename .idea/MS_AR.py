@@ -4,7 +4,7 @@ import random
 import matplotlib.pyplot as plt
 # import tushare as ts
 
-#生成HMM观察值
+#生成HMM观察值,基于隐藏马尔可夫与AR的模拟股价观察数据
 class MS_AR_observation:
     # pi初始分布，aij跳转概率分布
     def __init__(self,meanlist=[],stddevlist=[],T=100,pi_o=[],aij=[],beta=0.85):
@@ -117,6 +117,50 @@ class MS_AR():
           self.Gamma=tf.zeros((self.T,self.m,self.m)) #r_i_j
           self.Epsilon=tf.zeros((self.T,self.m))      #滤波概率e(j)=sum(r_i_j,by i)
           self.Rho=tf.zeros((self.T,self.m))          #平滑概率P（st|y1....T）
+          self.Vega=np.zeros((self.T,self.m))         #P(st+1|y1...t)
+
+          #预测值y[t],t=1.....T+1，这是期望值
+          self.y_forecast=np.zeros(self.T+1)
+          self.var_forecast=np.zeros(self.T+1)
+          self.SRPE=0.0
+          self.ARPE=0.0
+
+      def forecast(self):#预测T+1时刻的观察值,now_t可以是2....T+1
+          #预测y的期望
+          self.y_forecast[0]=self.obs_2_T[0] #第一个观测值无法预测等于真实值
+          for  t in range(self.T):
+               sum2=0.0 #在st+1=j的条件下的条件概率期望值
+               for j in range(self.m):
+                   #这里使用的是平滑p(st=j|y_index,index=1....t)
+                   #当然可以使用滤波P(st=j|y_index,index=1....T)
+                   #temp_list=self.Epsilon
+                   temp_list=list(tf.reshape(self.Rho[t,:],(-1,)).numpy())
+                   #基于滤波概率寻到的当前t下的最大
+                   mark=temp_list.index(max(temp_list))
+                                        #在t+1时刻状态的mean                    #在t时刻最可能的st的mean
+                   sum2=sum2+self.Vega[t,j]*(self.mean[j]+self.bate*(self.obs_2_T[t]-self.mean[int(mark)]))
+               self.y_forecast[t+1]=sum2.numpy()
+
+          #预测方差期望
+          for  t in range(self.T):
+               sum3=0.0 #在st+1=j的条件下的条件概率期望值
+               for j in range(self.m):
+                  #在t+1时刻状态的mean                    #在t时刻最可能的st的mean
+                  sum3=sum3+self.Vega[t,j]*self.var[j]
+               self.var_forecast[t+1]=sum3.numpy()
+
+          for t in range(self.T):
+              if t>0:
+                 self.SRPE=self.SRPE+np.abs(self.y_forecast[t]-self.obs_2_T[t])/np.abs(self.obs_2_T[t])
+          self.ARPE=self.SRPE/(self.T-1)
+
+      def init_Vega(self):
+          for t in range(self.T):
+              for j in range(self.m):
+                  sum1=tf.constant(0.0,tf.float32)
+                  for i in range(self.m):
+                       sum1=sum1+self.Epsilon[t,i]*self.aij[i,j]
+                  self.Vega[t,j]=sum1.numpy()
 
       def init_Rho(self):#使用复杂的tf.concat而不是简单的list的合并是为了能够利用tf的反向求导
           #
@@ -256,20 +300,21 @@ class MS_AR():
           self.Gamma=tf.reshape(self.Gamma,(self.T,self.m,self.m))
 
       #EM方法训练
-      def __call__(self,iter=100):
+      def __call__(self,iter=5):
           print("样本跳转频率:",self.HMM_obs.aij_sample)
           print("样本分布频率：",self.HMM_obs.pi_sample)
           print("样本序列初始状体:",self.HMM_obs.record_state[0])
+          print("____________________________________________")
           # self.Gamma=tf.zeros((self.T,self.m,self.m))
           # self.Eta=tf.zeros((self.m,self.m,self.T))
-          i=0
-          while(i<iter):
+          out_num=0
+          while(out_num<iter):
               with tf.GradientTape() as tape:
                    self.init_frist()
                    self.init_Eta()
                    self.init_Gamma()
-                   self.init_Rho() #测试平滑时候使用
-                   exit()
+                   # self.init_Rho() #测试平滑时候使用
+                   # exit()
                    loss=tf.constant(0.0,dtype=tf.float32)
                    for t in range(self.T):
                        sum1=tf.constant(0.0,tf.float32)
@@ -289,10 +334,14 @@ class MS_AR():
               print("mean:",self.mean.numpy())
               print("var:",self.var.numpy())
               print("beta:",self.bate.numpy())
-              print("__________________")
-              i=i+1
-
+              print(out_num,"__________________")
+              out_num+=1
 
 a=MS_AR()
-a()
+a()#训练
+a.init_Rho()#平滑概率矩阵初始化
+a.init_Vega()#t+1滤波概率矩阵初始化
+a.forecast()
+print(a.SRPE)
+print(a.ARPE)
 
