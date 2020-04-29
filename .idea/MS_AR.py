@@ -119,6 +119,7 @@ class MS_AR():
           self.Rho=tf.zeros((self.T,self.m))          #平滑概率P（st|y1....T）
 
       def init_Rho(self):#使用复杂的tf.concat而不是简单的list的合并是为了能够利用tf的反向求导
+          #
           self.Rho=tf.constant(self.pi,tf.float32)
           for t in range(self.T-1):
               if t==0:#t=T-1
@@ -126,26 +127,26 @@ class MS_AR():
                  for j in range(self.m):
                      sum1=0
                      for k in range(self.m):
-                         numerator=self.Rho[k]*self.Epsilon[t,j]*self.aij[j,k]
+                         numerator=self.Rho[k]*self.Epsilon[self.T-2-t,j]*self.aij[j,k]
                          denominator=0
                          for i in range(self.m):
-                             denominator=denominator+self.Epsilon[t,i]*self.aij[i,k]
+                             denominator=denominator+self.Epsilon[self.T-2-t,i]*self.aij[i,k]
                          sum1=sum1+numerator/denominator
                      if j==0:
                         rho_tmp=sum1
                      else:
                         rho_tmp=tf.concat([tf.reshape(rho_tmp,(-1,)),tf.reshape(sum1,(-1,))],axis=0)
                  self.Rho=tf.reshape(rho_tmp,(1,-1))  #[[....]]用于下一个tf.concat
-                 print(self.Rho)
+                 # print(self.Rho)
               else:
                  rho_tmp=tf.constant(0.0,tf.float32)
                  for j in range(self.m):
                       sum1=0
                       for k in range(self.m):
-                          numerator=self.Rho[t-1,k]*self.Epsilon[t,j]*self.aij[j,k]
+                          numerator=self.Rho[t-1,k]*self.Epsilon[self.T-2-t,j]*self.aij[j,k]
                           denominator=0
                           for i in range(self.m):
-                              denominator=denominator+self.Epsilon[t,i]*self.aij[i,k]
+                              denominator=denominator+self.Epsilon[self.T-2-t,i]*self.aij[i,k]
                           sum1=sum1+numerator/denominator
                       if j==0:
                          rho_tmp=sum1
@@ -156,6 +157,10 @@ class MS_AR():
                  rho_tmp=tf.reshape(tf.cast(rho_tmp,tf.float32),(-1,))
                  self.Rho=tf.concat([rho_tmp,tf.reshape(self.Rho,(-1,))],axis=0)
                  self.Rho=tf.reshape(self.Rho,(t+1,self.m))
+
+          rho_tmp=tf.reshape(self.pi,(-1,))
+          self.Rho=tf.concat([tf.reshape(self.Rho,(-1,)),rho_tmp],axis=0)
+          self.Rho=tf.reshape(self.Rho,(self.T,self.m))
 
       def init_Eta(self):#初始化基于观察值的正态分布变量矩阵Eta
           #t-1时刻处于i状态，t时候跳转到j状态
@@ -263,6 +268,8 @@ class MS_AR():
                    self.init_frist()
                    self.init_Eta()
                    self.init_Gamma()
+                   self.init_Rho() #测试平滑时候使用
+                   exit()
                    loss=tf.constant(0.0,dtype=tf.float32)
                    for t in range(self.T):
                        sum1=tf.constant(0.0,tf.float32)
@@ -288,5 +295,4 @@ class MS_AR():
 
 a=MS_AR()
 a()
-#平滑测试
-a.init_Rho()
+
