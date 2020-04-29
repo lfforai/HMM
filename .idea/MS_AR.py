@@ -65,7 +65,7 @@ class MS_AR_observation:
         plt.plot(x,y)
         plt.show()
 
-HMM_observation=MS_AR_observation([50.0,47.0],[1.5,1.8],200,[0.5,0.5],[[0.7,0.3],[0.6,0.4]],0.85)
+HMM_observation=MS_AR_observation([50.0,47.0],[1.5,1.8],500,[0.5,0.5],[[0.7,0.3],[0.6,0.4]],0.85)
 HMM_observation.genetate()
 HMM_observation.paint()
 
@@ -114,8 +114,48 @@ class MS_AR():
 
           #中间变量
           self.Eta=tf.zeros((self.m,self.m,self.T))   #AR(1)的正态分布概率矩阵,观测值在同状态下的概率和前一个观察者有关
-          self.Gamma=tf.zeros((self.T,self.m,self.m))
-          self.Epsilon=tf.zeros((self.T,self.m))
+          self.Gamma=tf.zeros((self.T,self.m,self.m)) #r_i_j
+          self.Epsilon=tf.zeros((self.T,self.m))      #滤波概率e(j)=sum(r_i_j,by i)
+          self.Rho=tf.zeros((self.T,self.m))          #平滑概率P（st|y1....T）
+
+      def init_Rho(self):#使用复杂的tf.concat而不是简单的list的合并是为了能够利用tf的反向求导
+          self.Rho=tf.constant(self.pi,tf.float32)
+          for t in range(self.T-1):
+              if t==0:#t=T-1
+                 rho_tmp=tf.constant(0.0,tf.float32)
+                 for j in range(self.m):
+                     sum1=0
+                     for k in range(self.m):
+                         numerator=self.Rho[k]*self.Epsilon[t,j]*self.aij[j,k]
+                         denominator=0
+                         for i in range(self.m):
+                             denominator=denominator+self.Epsilon[t,i]*self.aij[i,k]
+                         sum1=sum1+numerator/denominator
+                     if j==0:
+                        rho_tmp=sum1
+                     else:
+                        rho_tmp=tf.concat([tf.reshape(rho_tmp,(-1,)),tf.reshape(sum1,(-1,))],axis=0)
+                 self.Rho=tf.reshape(rho_tmp,(1,-1))  #[[....]]用于下一个tf.concat
+                 print(self.Rho)
+              else:
+                 rho_tmp=tf.constant(0.0,tf.float32)
+                 for j in range(self.m):
+                      sum1=0
+                      for k in range(self.m):
+                          numerator=self.Rho[t-1,k]*self.Epsilon[t,j]*self.aij[j,k]
+                          denominator=0
+                          for i in range(self.m):
+                              denominator=denominator+self.Epsilon[t,i]*self.aij[i,k]
+                          sum1=sum1+numerator/denominator
+                      if j==0:
+                         rho_tmp=sum1
+                      else:
+                         rho_tmp=tf.concat([tf.reshape(rho_tmp,(-1,)),tf.reshape(sum1,(-1,))],axis=0)
+
+                 #新的Eho_tmp添加到时序中去
+                 rho_tmp=tf.reshape(tf.cast(rho_tmp,tf.float32),(-1,))
+                 self.Rho=tf.concat([rho_tmp,tf.reshape(self.Rho,(-1,))],axis=0)
+                 self.Rho=tf.reshape(self.Rho,(t+1,self.m))
 
       def init_Eta(self):#初始化基于观察值的正态分布变量矩阵Eta
           #t-1时刻处于i状态，t时候跳转到j状态
@@ -141,7 +181,7 @@ class MS_AR():
           self.aij=tf.concat([self.aij,tf.reshape(self.q_exp,(-1,))],axis=0)
           self.aij=tf.reshape(self.aij,(self.m,self.m))
 
-      #计算r_i_j(t)
+      #计算r_i_j(t)和滤波概率
       def init_Gamma(self):
           #计算t=1时刻r_i_j(1)
           for t in range(self.T):
@@ -231,7 +271,7 @@ class MS_AR():
                                 sum1=sum1+self.Gamma[t,i,j]*self.Eta[i,j,t]
                        loss=loss+tf.math.log(sum1)
                    loss=-1.0*loss
-                   y=self.mse_loss_fn(np.ones(1),loss)/self.T
+                   y=self.mse_loss_fn(np.ones(1),loss)
               #计算偏导数
               grads = tape.gradient(y,self.trainableweihts)
               #利用偏导进行梯度下降调整
@@ -245,5 +285,8 @@ class MS_AR():
               print("__________________")
               i=i+1
 
+
 a=MS_AR()
 a()
+#平滑测试
+a.init_Rho()
