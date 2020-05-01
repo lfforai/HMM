@@ -25,8 +25,7 @@ for gpu in gpus:
     tf.config.experimental.set_memory_growth(gpu, True)
 from tensorflow.keras import layers
 
-#基于actor_critics和 actor_critics_GAE的算法
-
+#基于自然梯度的算法，请调节阈值和参数，不然会有不收敛情况
 #构造神经网
 class Linear(layers.Layer):
     def __init__(self, name="Linear",units=32,training=True,**kwargs):
@@ -57,8 +56,8 @@ class critic(tf.keras.Model):#计算V(S）
     def __init__(self, name="critic",training=True,**kwargs):
         super(critic, self).__init__(name=name,**kwargs)
         self.training=training
-        self.block_1 = Linear(name="critic_linear1",units=62,training=training)
-        self.block_2 = Linear(name="critic_linear2",units=62,training=training)
+        self.block_1 = Linear(name="critic_linear1",units=32,training=training)
+        self.block_2 = Linear(name="critic_linear2",units=32,training=training)
         self.block_3 = Linear(name="critic_linear3",units=1,training=training)
 
     @tf.function
@@ -71,35 +70,20 @@ class critic(tf.keras.Model):#计算V(S）
         return x
 
     def train(self,x_train,y_ture,size):
-        optimizer = tf.keras.optimizers.Adam(learning_rate=1.5e-3)
+        optimizer = tf.keras.optimizers.Adam(learning_rate=2e-3)
         self.compile(optimizer, loss=tf.keras.losses.MeanSquaredError())
-        self.fit(x_train, y_ture, epochs=5,batch_size=size,verbose=0)
+        self.fit(x_train, y_ture, epochs=3,batch_size=size,verbose=0)
 
     def get_config(self):
         config = super(critic, self).get_config()
         return config
 
-#loss:sum(A(at,st)*log(Pi(at|st)))
-class selfLoss(tf.keras.losses.Loss):
-    def __init__(self,len):
-        super(selfLoss,self).__init__()
-        self.len=len
-
-                   #A(at,st) #log(Pi(at|st))
-    def __call__(self,y_true,y_pred):
-        y_pred=tf.math.log(tf.cast(y_pred,tf.float32))#Pi(at|st)
-        y_true=tf.cast(y_true,tf.float32)#A(at,st)
-        y_true=tf.reshape(y_true,(self.len,-1))#列
-        y_pred=tf.reshape(y_pred,(1,-1))#行
-        result=tf.matmul(y_pred,y_true)
-        return tf.reshape(result,(-1,))
-
 class actor(tf.keras.Model):#计算Pi(at|st)
     def __init__(self, name="actor",training=True,**kwargs):
         super(actor, self).__init__(name=name,**kwargs)
         self.training=training
-        self.block_1 = Linear(name="actor_linear1",units=62,training=training)
-        self.block_2 = Linear(name="actor_linear2",units=62,training=training)
+        self.block_1 = Linear(name="actor_linear1",units=32,training=training)
+        self.block_2 = Linear(name="actor_linear2",units=32,training=training)
         self.block_3 = Linear(name="actor_linear1",units=2,training=training)
 
     @tf.function
@@ -116,7 +100,7 @@ class actor(tf.keras.Model):#计算Pi(at|st)
         config = super(actor, self).get_config()
         return config
 
-class actor_critics():
+class natural_gradient():
     def __init__(self,filepath="/root/natural/"):
         self.filepath=filepath
         self.actor_net=actor()#计算actor=PI（at|st）
@@ -131,7 +115,6 @@ class actor_critics():
             print("加载参数")
             self.actor_net.load_weights(self.filepath+"actor_1.0")
             self.critic_net.load_weights(self.filepath+"critic_1.0")
-
         from collections import deque
         self.sample_critic=deque([])#有效利用历史样本V（s）
         self.sample_actor=[]#无法利用历史样本actor=PI（at|st）
@@ -141,12 +124,16 @@ class actor_critics():
         self.N_critic_batch=200
         self.N_actor_batch=200#梯度下降的batchsize
         self.r=0.90#折扣系数
-        self.bate=0.85#计算GEA的weight
-        self.optimizer=tf.keras.optimizers.Adam(learning_rate=1.0e-3)
+        self.threshold=0.000001#计算自然梯度的阙值 ,自适应梯度0.001，自然梯度0.000001
+        self.optimizer = tf.keras.optimizers.SGD(learning_rate=1.0)#更新梯度优化器
+        self.record_shape=[] #记录每个weight的shape 用于还原
+        self.record_len=[]   #记录每个weight的长度  用于还原
 
     def action(self,state):#[state],以Pi（at|st）选择
         state=np.array(state,dtype=float)
         left_pro,right_pro=self.actor_net(state)[0]
+        # print(left_pro)
+        # print(right_pro)
         left_pro=left_pro.numpy()
         right_pro=1.0-left_pro
         return np.random.choice(a=[0,1],p=[left_pro,right_pro])
@@ -185,7 +172,12 @@ class actor_critics():
     def coll_sample_actor(self):#由于actor计算Pi（at|st）
         self.sample_actor=[]#由于不可使用历史样本，每次必须清空
         d=0
-        list_num=0
+        # d=self.sample_actor.__len__()
+        # if  d>=self.N_actor:#buffer满腾出空间，补充新样本
+        #     print("sample_actor已满，扩充样本")
+        #     for e in range(self.N_critic_remove):
+        #         self.sample_actor.popleft()
+        #     d=self.sample_actor.__len__()
         while d<self.N_actor:
             state_now = self.env.reset()
             sum_loss=0
@@ -201,21 +193,20 @@ class actor_critics():
                 if  done:
                     index+=1
                     d=d+1
-                    self.sample_actor.append((state_now,state_next,reward,action_now,index,-1,list_num))
+                    self.sample_actor.append((state_now,state_next,reward,action_now,index,-1))
                     sum_loss+=reward
                     if d%5==0:
                         print("actor sample total reward:",sum_loss)
-                    list_num+=1
                     break
                 else:
                     index+=1
                     d=d+1
                     #e[0]当前s，e[1]跳转s,e[2]reward，e[3]当前action,e[4]t折扣期,e[5]done
-                    self.sample_actor.append((state_now,state_next,reward,action_now,index,1,list_num))
+                    self.sample_actor.append((state_now,state_next,reward,action_now,index, 1))
                     sum_loss+=reward
                     state_now=state_next
 
-    def critic_train(self):
+    def V_value_train(self):
         s_critic=list(self.sample_critic).copy()
         random.shuffle(s_critic)
         s_critic=s_critic[:int(self.N_critic_batch)]
@@ -232,116 +223,117 @@ class actor_critics():
         y=np.array(y,dtype=float)
         self.critic_net.train(x,y,x.__len__())
 
-    #普通critics算法
+    def weight_gather(self,list_v=[]):
+        result=[]
+        for e in list_v:
+            result.extend(list(np.reshape(e.numpy(),(-1))))
+        return result
+
+    def record_weight_shape(self,list_v=[]):#记录神经网参数的shape,用于还原
+        result=[]
+        len=[]
+        for e in list_v:
+            temp=np.shape(e)
+            l=1
+            for v in list(temp):
+                l=l*v
+            result.append(tuple(temp))
+            len.append(l)
+        return result,len#返回每个weight向量的shape和长度，用于还原
+
+    def reshape_weight_shape(self,list_v=[]):
+        Dw=list(np.reshape(list_v,(-1)))#（-1）的shape
+        result=[]
+        i=0
+        start=0
+        end=0
+        for len in self.record_len:
+            end=end+len
+            result.append(tf.reshape(tf.constant(Dw[start:end],dtype=tf.float32),self.record_shape[i]))
+            start=end
+            i+=1
+        return result
+
     def actor_train(self):
         s_actor=list(self.sample_actor).copy()
         random.shuffle(s_actor)
         s_actor=s_actor[:int(self.N_actor_batch)]
-        actor_list=[]
-        state=[]
-        A=[]
+        n=0
+        #e[0]当前s，e[1]跳转s,e[2]reward，e[3]当前action,e[4]t折扣期,e[5]done
         for e in s_actor:
             #计算当前action
             if e[3]==0:#left
-                action_v=tf.constant([1.0,0.0],dtype=tf.float32)
+                action_v=tf.constant([[1.0,0.0]],dtype=tf.float32)
             else:#right
-                action_v=tf.constant([0.0,1.0],dtype=tf.float32)
-            actor_list.append(action_v)
-
-            #当前状态
-            state.append(e[0])
-            if e[5]>0:#非终止状态
-                A.append(e[2]+self.r*self.critic_net(np.array([e[1]]))[0]-self.critic_net(np.array([e[0]]))[0])
-            else:#终止状态
-                A.append(e[2]-self.critic_net(np.array([e[0]]))[0])
-
-        loss=selfLoss(A.__len__())
-        actor_list=tf.cast(np.array(actor_list),tf.float32)
-        mark=0
-        while mark<10:
+                action_v=tf.constant([[0.0,1.0]],dtype=tf.float32)
             with tf.GradientTape() as tape:
-                action_pro=self.actor_net(np.array(state)) #由当前状态计算向左和向右的概率 pi(at|st)
-                y_pre=tf.reduce_sum(tf.multiply(actor_list,action_pro),axis=1)
-                z=-1.0*loss(np.array(A),y_pre)/tf.cast(A.__len__(),tf.float32)
-            grads = tape.gradient(z,self.actor_net.trainable_weights)
-            #利用偏导进行梯度下降调整
-            self.optimizer.apply_gradients(zip(grads,self.actor_net.trainable_weights))
-            mark=mark+1
-
-    #基于加权的critics算法GAE
-    def actor_train_GAE(self):
-        s_actor=list(self.sample_actor).copy()
-        s_actor=s_actor[:int(self.N_actor_batch)]
-
-        actor_list=[]
-        state=[]
-        A=[]
-        for e in s_actor:
-            #计算当前action
-            if e[3]==0:#left
-                action_v=tf.constant([1.0,0.0],dtype=tf.float32)
-            else:#right
-                action_v=tf.constant([0.0,1.0],dtype=tf.float32)
-            actor_list.append(action_v)
-            #当前状态
-            state.append(e[0])
-
-        #把每个子过程分离开
-        list_A=[]
-        sub_list_index=0 #每个子过程的序列号1...T分离为一组
-        temp_list=[]
-        j=0
-        for e in s_actor:
-            if e[6]==sub_list_index:
-               temp_list.append(e)
+                y=self.actor_net([np.array(e[0])])
+                #actor神经网一次输出2个动作概率，但是只计算当前action的Dlog（action|st）
+                loss=tf.reduce_sum(tf.multiply(tf.math.log(y),action_v))
+            #计算Dlog（action|st）
+            grads=tape.gradient(loss,self.actor_net.trainable_weights)
+            del tape
+            dz_dgrads=self.weight_gather(grads)#把所有训练参数组合为一个向量
+            dz_dgrads_A=dz_dgrads.copy()
+            #计算fisher-information matrix的其中一个元素
+            if n==0:
+                n=dz_dgrads.__len__()
+                F=np.eye(n)*0.000001
+                # F=np.zeros((n,n))
+                DJ=np.zeros(n)
+                self.record_shape,self.record_len=self.record_weight_shape(grads)#记录参数shape
+            dz_dgrads=tf.reshape(tf.constant(dz_dgrads,dtype=tf.float32),(n,1))#[[1],[2],[3],[3]]列
+            dz_dgrads_T=tf.reshape(dz_dgrads,(1,n))#[[1,2,3,4]]行
+            F=F+tf.matmul(dz_dgrads,dz_dgrads_T).numpy()
+            #计算DJ的其中一个元素  #e[0]当前s，e[1]跳转s,e[2]reward，e[3]当前action,e[4]t折扣期,e[5]done
+            if e[5]>0:#非结束
+                A=(e[2]+self.r*self.critic_net(np.array([e[1]]))[0]-self.critic_net(np.array([e[0]]))[0])*np.power(self.r,e[4])
+                A=A*np.array(dz_dgrads_A,dtype=float)
+                DJ=DJ+A
             else:
-               list_A.append(temp_list)
-               sub_list_index=e[6]
-               temp_list=[]
-               temp_list.append(e)
-        list_A.append(temp_list)
+                A=(e[2]-self.critic_net(np.array([e[0]]))[0])*np.power(self.r,e[4])
+                A=A*np.array(dz_dgrads_A,dtype=float)
+                DJ=DJ+A
 
-        A=[]#计算A（at，st）
-        for sub_list in list_A:
-            sub_list=list(sub_list)
-            len_o=sub_list.__len__()
-            temp_list=[]
-            for e in sub_list:
-                if e[5]>0:#非终止状态
-                    temp_list.append((e[2]+self.r*self.critic_net(np.array([e[1]]))[0]-self.critic_net(np.array([e[0]]))[0]).numpy()[0])
-                else:#终止状态
-                    temp_list.append((e[2]-self.critic_net(np.array([e[0]]))[0]).numpy()[0])
+        #计算参数F和DJ
+        F=tf.constant(F,dtype=tf.float32)
+        DJ=tf.constant(DJ,dtype=tf.float32)
+        DJ=DJ/s_actor.__len__()
+        F=F/s_actor.__len__()#自然梯度1
+        DJ_row=tf.reshape(DJ,(1,n))
+        DJ_col=tf.reshape(DJ,(n,1))
 
-            for i in range(len_o):
-                sum1=0
-                list_sub=temp_list[i:]
-                for e in list_sub:
-                    sum1=sum1+np.power(self.r*self.bate,i)*e
-                A.append(sum1)
+        deta=np.power(2.0*self.threshold/(tf.matmul(DJ_row,tf.matmul(F,DJ_col))[0][0]),0.5)#自然梯度1
+        # deta=np.power(self.threshold/tf.matmul(DJ_row,DJ_col)[0][0],0.5) #自适应参数2
 
-        loss=selfLoss(A.__len__())
-        actor_list=tf.cast(np.array(actor_list),tf.float32)
-        mark=0
-        while mark<10:
-            with tf.GradientTape() as tape:
-                action_pro=self.actor_net(np.array(state)) #由当前状态计算向左和向右的概率 pi(at|st)
-                y_pre=tf.reduce_sum(tf.multiply(actor_list,action_pro),axis=1)
-                z=-1.0*loss(np.array(A),y_pre)/tf.cast(A.__len__(),tf.float32)
-            grads = tape.gradient(z,self.actor_net.trainable_weights)
-            #利用偏导进行梯度下降调整
-            self.optimizer.apply_gradients(zip(grads,self.actor_net.trainable_weights))
-            mark=mark+1
+        #更新参数
+        Dw=tf.constant(-1.0)*deta*tf.matmul(np.linalg.inv(F),DJ_col)#自然梯度1
+        # Dw=tf.constant(-1.0)*deta*DJ_col #自适应参数2
 
-    def train(self,type_method="GAE"):
+        print("deta:",deta)
+        grads_Dw=self.reshape_weight_shape(Dw)
+        print(Dw)
+
+        #还原参数到神经网的shape
+        self.optimizer.apply_gradients(zip(grads_Dw,self.actor_net.trainable_weights))
+        self.actor_net.save_weights(os.path.join(self.filepath,'actor_{}'.format(1.0)))
+        self.critic_net.save_weights(os.path.join(self.filepath,'critic_{}'.format(1.0)))
+
+    def train(self):
         for e  in range(100000):
+            # if e<5:
+            #    self.threshold=0.000000001
+            # else:
+            #    self.threshold=0.001
+            # if e%5==0 and e!=0:
+            #    if self.threshold<0.0000001:
+            #       self.threshold=self.threshold*1.05
+            #    else:
+            #       self.threshold=0.0000001
             self.coll_sample_critic()
-            self.critic_train()
+            self.V_value_train()
             self.coll_sample_actor()
-            # self.actor_train()
-            self.actor_train_GAE()
-            if e%10==0:
-               self.actor_net.save_weights(os.path.join(self.filepath,'actor_{}'.format(1.0)))
-               self.critic_net.save_weights(os.path.join(self.filepath,'critic_{}'.format(1.0)))
+            self.actor_train()
 
-a=actor_critics()
+a=natural_gradient()
 a.train()
