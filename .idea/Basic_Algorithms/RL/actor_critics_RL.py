@@ -497,5 +497,6 @@ class actor_critics():
                self.actor_net.save_weights(os.path.join(self.filepath,'actor_{}'.format(1.0)))
                self.critic_net.save_weights(os.path.join(self.filepath,'critic_{}'.format(1.0)))
 
-a=actor_critics()
-a.train()
+# a=actor_critics()
+# a.train()
+print(np.argmin(np.array([5.0,2.0,3.0,4.0]),axis=0))
