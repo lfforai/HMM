@@ -161,6 +161,7 @@ class iLQR():
           self.T=T #向后进行plan的周期
           self.N=N #在执行N次后，重新拟合一次
           self.r=0.9
+          self.beta=0.0001
 
       def sample_random(self):#由于critic计算V（s）可以利用历史采样样本
           d=self.sample.__len__()
@@ -278,7 +279,7 @@ class iLQR():
           if max_len>self.T:
              max_list=max_list[:self.T]
              max_len=self.T
-          for _ in range(5):
+          for _ in range(3):
               state_action=[]
               for e in max_list:
                   s=tf.constant(e[0],tf.float32)
@@ -330,8 +331,8 @@ class iLQR():
               #当t==0
               max_list_new=[]
               e=max_list[0]
-              new_action=kt_list[0]+tf.constant(e[2],tf.float32)
-              if new_action>0:
+              new_action=self.beta*kt_list[0]+tf.constant(e[2],tf.float32)
+              if np.abs(new_action-1.0)<np.abs(new_action):
                  new_action=1
               else:
                  new_action=0
@@ -342,8 +343,8 @@ class iLQR():
                   now_s=max_list[t+1]
                   last_s=max_list_new[t]
                   dx=tf.reshape(tf.constant(last_s[1]-now_s[0],tf.float32),(-1,1))
-                  new_action=(tf.matmul(Kt_list[t+1],dx)+kt_list[t+1]+now_s[2]).numpy()[0][0]
-                  if  new_action>0:
+                  new_action=(tf.matmul(Kt_list[t+1],dx)+self.beta*kt_list[t+1]+now_s[2]).numpy()[0][0]
+                  if  np.abs(new_action-1.0)<np.abs(new_action):
                       new_action=tf.constant(1.0,tf.float32)
                   else:
                       new_action=tf.constant(0.0,tf.float32)
@@ -385,13 +386,4 @@ fun=function_o(4,1,tf.constant([-2.0,-0.30943951023931953,-1.5,-1.4],tf.float32)
 iLQR_a=iLQR(fun)
 iLQR_a.train_iLQR()
 
-# e=tf.constant([[1.0,2.0,3.0],[4.0,5.0,6.0]])
-# # with tf.GradientTape() as tape:
-# #     tape.watch(e)
-# #     value=tf.reduce_sum(tf.exp(e),axis=1)
-# # print(value)
-# # print(tape.jacobian(value,e))
-# def f(e):
-#      return tf.reshape(tf.reduce_sum(tf.exp(e),axis=1),(-1,))
-# print(f(e))
-# print(compute_hessians(f,e))
+
