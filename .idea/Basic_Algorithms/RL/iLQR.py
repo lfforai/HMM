@@ -114,10 +114,12 @@ class function_o(tf.keras.Model):#计算V(S）
     def train(self,x_train,y_ture,size):
         optimizer = tf.keras.optimizers.Adam(learning_rate=1.5e-3)
         self.compile(optimizer, loss=selfLoss)
-        self.fit(x_train, y_ture, epochs=30,batch_size=size,verbose=1)
+        self.load_weights('./ckpt/')
+        self.fit(x_train, y_ture, epochs=30,batch_size=size,verbose=0)
+        self.save_weights('./ckpt/')
 
     def get_config(self):
-        config = super(critic, self).get_config()
+        config = super(function_o, self).get_config()
         return config
 
 #成本函数
@@ -128,11 +130,11 @@ class reward_o():
 
       @tf.function
       def __call__(self,input):
-          state_next=tf.reshape(self.fun(input),(-1,))
-          x=state_next[0]
-          x_dot=state_next[1]
-          theta=state_next[2]
-          theta_dot=state_next[3]
+          state_next=self.fun(input)
+          x=state_next[:,0]
+          x_dot=state_next[:,1]
+          theta=state_next[:,2]
+          theta_dot=state_next[:,3]
           r1 = (self.env.x_threshold - tf.abs(x))/self.env.x_threshold - 0.8
           r2 = (self.env.theta_threshold_radians - tf.abs(theta))/self.env.theta_threshold_radians - 0.5
           t=r1+r2
@@ -146,15 +148,15 @@ def compute_hessians(z,xy):
     return hes
 
 class iLQR():
-      def __init__(self,fun_t,T=10,N=30):
+      def __init__(self,fun_t,T=5,N=10):
           self.env=env_world
           self.fun=fun_t #构造跳转函数
           self.reward_fun=reward_o(self.fun) #构造
           from collections import deque
           self.sample=deque([])#有效利用历史样本V（s）
-          self.N_sample=500
-          self.N_sample_remove=200
-          self.N_sample_batch=400
+          self.N_sample=2000
+          self.N_sample_remove=500
+          self.N_sample_batch=1000
           self.action=0
           self.T=T #向后进行plan的周期
           self.N=N #在执行N次后，重新拟合一次
@@ -171,7 +173,7 @@ class iLQR():
               state_now = self.env.reset()
               sum_loss=0
               while True:
-                  self.env.render()
+                  # self.env.render()
                   action_now=self.env.action_space.sample()
                   state_next,reward,done,info = self.env.step(action_now)
                   x, x_dot, theta, theta_dot = state_next
@@ -180,14 +182,14 @@ class iLQR():
                   reward = r1 + r2
                   if  done:
                       d=d+1
-                      self.sample.append((state_now,state_next,reward,action_now,-1))
+                      self.sample.append((state_now,state_next,action_now,reward))
                       sum_loss+=reward
                       if d%5==0:
                           print("critic sample total reward:",sum_loss)
                       break
                   else:
                       d=d+1
-                      self.sample.append((state_now,state_next,reward,action_now,1))
+                      self.sample.append((state_now,state_next,action_now,reward))
                       sum_loss+=reward
                       state_now=state_next
 
@@ -202,7 +204,7 @@ class iLQR():
           for e in fun_sample:
               state_next.append(e[1])
               state_now.append(e[0])
-              action_now.append(e[3])
+              action_now.append(e[2])
           y=tf.constant(np.array(state_next),tf.float32)
           state_now=tf.constant(np.array(state_now),tf.float32)
           action_now=tf.reshape(tf.constant(np.array(action_now),tf.float32),(-1,1))
@@ -210,11 +212,11 @@ class iLQR():
           self.fun.train(x,y,self.N_sample_batch)
 
       #max trace
-      def max_sample_trace(self,state=[],trace_num=10):
+      def max_sample_trace(self,state=[],trace_num=5):
           trace_list=[]
           temp_list=[]
           i=0
-          if state:
+          if state.__len__()>0:
              state_now=np.array(state)
              self.env.env.state=state_now
           else:
@@ -229,7 +231,7 @@ class iLQR():
               reward=r1+r2
               if done==True:
                  temp_list.append((state_now,state_next,action,reward))
-                 if state:
+                 if state.__len__()>0:
                     state_now=np.array(state)
                     self.env.env.state=state_now
                  else:
@@ -240,8 +242,9 @@ class iLQR():
               else:
                  temp_list.append((state_now,state_next,action,reward))
                  state_now=state_next
-          max_value=0
+          max_value=-99999999
           max_list=[]
+          max_len=-1
           for e in trace_list:
               temp_len=list(e).__len__()
               temp_list=list(e)
@@ -256,20 +259,15 @@ class iLQR():
 
       #求hessian矩阵
       def hessian_matrix(self,f,list_sa=[],shape_num=5):
-          result=[]
-          for e in list_sa:
-              result.append(tf.reshape(compute_hessians(f,tf.reshape(e,(1,-1))),(shape_num,shape_num)))
+          result=compute_hessians(f,list_sa)
           return result
 
       #求雅可比矩阵
       def jacobian_matrix(self,f,list_sa=[],shape_num=5):
-          result=[]
-          for e in list_sa:
-              e=tf.reshape(e,(1,-1))
-              with tf.GradientTape() as tape:
-                   tape.watch(e)
-                   value=f(e)
-              result.append(tf.reshape(tape.jacobian(value,e),(-1,)))
+          with tf.GradientTape() as tape:
+               tape.watch(list_sa)
+               value=f(list_sa)
+          result=tf.reduce_sum(tape.jacobian(value,list_sa),axis=0)
           return result
 
       #对当前state，plan出最大reward的动作
@@ -277,39 +275,24 @@ class iLQR():
           sdim=4
           adim=1
           max_list,max_len,max_value=self.max_sample_trace(state=state_now)
-          state_action=[]
-          for e in max_list:
-              s=tf.constant(e[0],tf.float32)
-              a=tf.reshape(tf.constant(e[2],tf.float32),(-1,))
-              state_action.append(tf.concat([s,a],axis=0))
-          Ct_list=self.hessian_matrix(self.reward_fun,state_action)
-          ct_list=self.jacobian_matrix(self.reward_fun,state_action)
-          Ft_list=self.jacobian_matrix(self.fun,state_action)
-          Kt_list=[]
-          kt_list=[]
-
-          #计算LQR
-          #计算T时刻
-          Qt=tf.reshape(Ct_list[max_len-1],(sdim+adim,sdim+adim))
-          qt=tf.reshape(ct_list[max_len-1],(-1,1))
-          Qxx=Qt[:sdim,:sdim]
-          Qux=Qt[sdim:,:sdim]
-          Quu=Qt[sdim:,sdim:][0][0]
-          Qxu=Qt[:sdim,sdim:]
-          qu=qt[sdim:,][0][0]
-          qx=qt[:sdim,]
-          Kt=(-1.0)/Quu*Qux
-          kt=(-1.0)/Quu*qu
-          Vt=Qxx+tf.matmul(Qxu,Kt)+tf.matmul(tf.transpose(Kt),Qux)+tf.matmul(tf.transpose(Kt)*Quu,Kt)
-          vt=qx+Qxu*kt+tf.transpose(Kt)*qu+tf.transpose(Kt)*Quu*kt
-          Kt_list.append(Kt)
-          kt_list.append(kt)
-          for t in range(max_len-1):
-              Ft=tf.reshape(Ft_list[max_len-2-t],(sdim,sdim+adim))
-              Ct=tf.reshape(Ct_list[max_len-2-t],(sdim+adim,sdim+adim))
-              ct=tf.reshape(ct_list[max_len-2-t],(-1,1))
-              Qt=Ct+tf.matmul(tf.matmul(tf.transpose(Ft),Vt),Ft)
-              qt=ct+tf.matmul(tf.transpose(Ft),vt)
+          if max_len>self.T:
+             max_list=max_list[:self.T]
+             max_len=self.T
+          for _ in range(5):
+              state_action=[]
+              for e in max_list:
+                  s=tf.constant(e[0],tf.float32)
+                  a=tf.reshape(tf.constant(e[2],tf.float32),(-1,))
+                  state_action.append(tf.concat([s,a],axis=0))
+              Ct_list=self.hessian_matrix(self.reward_fun,state_action)
+              ct_list=self.jacobian_matrix(self.reward_fun,state_action)
+              Ft_list=self.jacobian_matrix(self.fun,state_action)
+              Kt_list=[]
+              kt_list=[]
+              #计算LQR
+              #计算T时刻
+              Qt=tf.reshape(Ct_list[max_len-1],(sdim+adim,sdim+adim))
+              qt=tf.reshape(ct_list[max_len-1],(-1,1))
               Qxx=Qt[:sdim,:sdim]
               Qux=Qt[sdim:,:sdim]
               Quu=Qt[sdim:,sdim:][0][0]
@@ -322,17 +305,93 @@ class iLQR():
               vt=qx+Qxu*kt+tf.transpose(Kt)*qu+tf.transpose(Kt)*Quu*kt
               Kt_list.append(Kt)
               kt_list.append(kt)
-          print(Kt_list)
-          print(kt_list)
-          action_max=0
+              for t in range(max_len-1):
+                  Ft=tf.reshape(Ft_list[max_len-2-t],(sdim,sdim+adim))
+                  Ct=tf.reshape(Ct_list[max_len-2-t],(sdim+adim,sdim+adim))
+                  ct=tf.reshape(ct_list[max_len-2-t],(-1,1))
+                  Qt=Ct+tf.matmul(tf.matmul(tf.transpose(Ft),Vt),Ft)
+                  qt=ct+tf.matmul(tf.transpose(Ft),vt)
+                  Qxx=Qt[:sdim,:sdim]
+                  Qux=Qt[sdim:,:sdim]
+                  Quu=Qt[sdim:,sdim:][0][0]
+                  Qxu=Qt[:sdim,sdim:]
+                  qu=qt[sdim:,][0][0]
+                  qx=qt[:sdim,]
+                  Kt=(-1.0)/Quu*Qux
+                  kt=(-1.0)/Quu*qu
+                  Vt=Qxx+tf.matmul(Qxu,Kt)+tf.matmul(tf.transpose(Kt),Qux)+tf.matmul(tf.transpose(Kt)*Quu,Kt)
+                  vt=qx+Qxu*kt+tf.transpose(Kt)*qu+tf.transpose(Kt)*Quu*kt
+                  Kt_list.append(Kt)
+                  kt_list.append(kt)
+              Kt_list.reverse() #1...T
+              kt_list.reverse()
+
+              #修正得到新的state和新的action
+              #当t==0
+              max_list_new=[]
+              e=max_list[0]
+              new_action=kt_list[0]+tf.constant(e[2],tf.float32)
+              if new_action>0:
+                 new_action=1
+              else:
+                 new_action=0
+              s_a=tf.constant(list(e[0])+list([new_action]),tf.float32)
+              max_list_new.append([e[0],self.fun([s_a])[0],new_action])#new_next_state
+              #按新的动作，调整样本状态
+              for t in range(max_len-1):
+                  now_s=max_list[t+1]
+                  last_s=max_list_new[t]
+                  dx=tf.reshape(tf.constant(last_s[1]-now_s[0],tf.float32),(-1,1))
+                  new_action=(tf.matmul(Kt_list[t+1],dx)+kt_list[t+1]+now_s[2]).numpy()[0][0]
+                  if  new_action>0:
+                      new_action=tf.constant(1.0,tf.float32)
+                  else:
+                      new_action=tf.constant(0.0,tf.float32)
+                  s_a=tf.constant(list(now_s[0])+list([new_action.numpy()]),tf.float32)
+                  max_list_new.append([now_s[0],self.fun([s_a])[0],new_action])#new_next_state
+              max_list=max_list_new
+          action_max=max_list[0][2]
           return action_max
+
+      def train_iLQR(self):
+          self.sample_random()
+          self.function_train()#训练st+1=f(st,at)
+          i=0
+          state_now = self.env.env.reset()
+          d=0
+          while i<1000000:
+                # self.env.render()
+                if i!=0 and i%self.N==0:
+                   self.function_train()#训练st+1=f(st,at)
+                action=self.plan_action(state_now)
+                state_next,reward,done,info=self.env.env.step(action)
+                if done:
+                   if self.sample.__len__()>=self.N_sample:#buffer满腾出空间，补充新样本
+                       for e in range(self.N_sample_remove):
+                           self.sample.popleft()
+                   self.sample.append((state_now,state_next,action,reward))
+                   if i%1==0:
+                      print("sample total step:",d)
+                   state_now=self.env.env.reset()
+                   d=0
+                else:
+                   d=d+1
+                   self.sample.append((state_now,state_next,action,reward))
+                   state_now=state_next
+                i=i+1
 
 # print(env_world.observation_space.low)
 fun=function_o(4,1,tf.constant([-2.0,-0.30943951023931953,-1.5,-1.4],tf.float32),tf.constant([4.0,0.30943951023931953*2,3.0,2.8],tf.float32))
 iLQR_a=iLQR(fun)
-iLQR_a.sample_random()
-iLQR_a.function_train()
-iLQR_a.plan_action()
-# #T-1
-# Qt=Ct+tf.matmul(tf.matmul(tf.transpose(Ft),Vt),Ft)
-# qt=qt+tf.matmul(tf.matmul(tf.transpose(Ft),Vt),ft)+tf.matmul(tf.transpose(Ft),vt)
+iLQR_a.train_iLQR()
+
+# e=tf.constant([[1.0,2.0,3.0],[4.0,5.0,6.0]])
+# # with tf.GradientTape() as tape:
+# #     tape.watch(e)
+# #     value=tf.reduce_sum(tf.exp(e),axis=1)
+# # print(value)
+# # print(tape.jacobian(value,e))
+# def f(e):
+#      return tf.reshape(tf.reduce_sum(tf.exp(e),axis=1),(-1,))
+# print(f(e))
+# print(compute_hessians(f,e))
