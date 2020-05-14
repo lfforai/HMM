@@ -75,7 +75,7 @@ class Linear(layers.Layer):
 #     def __call__(self,y_true,y_pred):
 #         loss=tf.reduce_mean(tf.math.pow(tf.reshape(y_true-y_pred,(-1,)),2.0))
 #         return loss
-
+@tf.function
 def selfLoss(y_true,y_pred):
     loss=tf.reduce_mean(tf.math.pow(tf.reshape(y_true-y_pred,(-1,)),2.0))
     return loss
@@ -213,7 +213,7 @@ class iLQR():
           self.fun.train(x,y,self.N_sample_batch)
 
       #max trace
-      def max_sample_trace(self,state=[],trace_num=5):
+      def max_sample_trace(self,state=[],trace_num=1):
           trace_list=[]
           temp_list=[]
           i=0
@@ -259,11 +259,13 @@ class iLQR():
           return max_list,max_len,max_value
 
       #求hessian矩阵
+      @tf.function
       def hessian_matrix(self,f,list_sa=[],shape_num=5):
           result=compute_hessians(f,list_sa)
           return result
 
       #求雅可比矩阵
+      @tf.function
       def jacobian_matrix(self,f,list_sa=[],shape_num=5):
           with tf.GradientTape() as tape:
                tape.watch(list_sa)
@@ -271,29 +273,30 @@ class iLQR():
           result=tf.reduce_sum(tape.jacobian(value,list_sa),axis=0)
           return result
 
-      #对当前state，plan出最大reward的动作
-      def plan_action(self,state_now=[]):
-          sdim=4
-          adim=1
-          max_list,max_len,max_value=self.max_sample_trace(state=state_now)
-          if max_len>self.T:
-             max_list=max_list[:self.T]
-             max_len=self.T
-          for _ in range(3):
-              state_action=[]
-              for e in max_list:
-                  s=tf.constant(e[0],tf.float32)
-                  a=tf.reshape(tf.constant(e[2],tf.float32),(-1,))
-                  state_action.append(tf.concat([s,a],axis=0))
-              Ct_list=self.hessian_matrix(self.reward_fun,state_action)
-              ct_list=self.jacobian_matrix(self.reward_fun,state_action)
-              Ft_list=self.jacobian_matrix(self.fun,state_action)
-              Kt_list=[]
-              kt_list=[]
-              #计算LQR
-              #计算T时刻
-              Qt=tf.reshape(Ct_list[max_len-1],(sdim+adim,sdim+adim))
-              qt=tf.reshape(ct_list[max_len-1],(-1,1))
+      @tf.function
+      def back(self,Ct_list,ct_list,Ft_list,max_len,sdim,adim):
+          #计算LQR
+          #计算T时刻
+          Qt=tf.reshape(Ct_list[max_len-1],(sdim+adim,sdim+adim))
+          qt=tf.reshape(ct_list[max_len-1],(-1,1))
+          Qxx=Qt[:sdim,:sdim]
+          Qux=Qt[sdim:,:sdim]
+          Quu=Qt[sdim:,sdim:][0][0]
+          Qxu=Qt[:sdim,sdim:]
+          qu=qt[sdim:,][0][0]
+          qx=qt[:sdim,]
+          Kt=(-1.0)/Quu*Qux
+          kt=(-1.0)/Quu*qu
+          Vt=Qxx+tf.matmul(Qxu,Kt)+tf.matmul(tf.transpose(Kt),Qux)+tf.matmul(tf.transpose(Kt)*Quu,Kt)
+          vt=qx+Qxu*kt+tf.transpose(Kt)*qu+tf.transpose(Kt)*Quu*kt
+          Kt_list=tf.reshape(Kt,(1,1,-1))
+          kt_list=tf.reshape(kt,(1,-1))
+          for t in range(max_len-1):
+              Ft=tf.reshape(Ft_list[max_len-2-t],(sdim,sdim+adim))
+              Ct=tf.reshape(Ct_list[max_len-2-t],(sdim+adim,sdim+adim))
+              ct=tf.reshape(ct_list[max_len-2-t],(-1,1))
+              Qt=Ct+tf.matmul(tf.matmul(tf.transpose(Ft),Vt),Ft)
+              qt=ct+tf.matmul(tf.transpose(Ft),vt)
               Qxx=Qt[:sdim,:sdim]
               Qux=Qt[sdim:,:sdim]
               Quu=Qt[sdim:,sdim:][0][0]
@@ -304,54 +307,62 @@ class iLQR():
               kt=(-1.0)/Quu*qu
               Vt=Qxx+tf.matmul(Qxu,Kt)+tf.matmul(tf.transpose(Kt),Qux)+tf.matmul(tf.transpose(Kt)*Quu,Kt)
               vt=qx+Qxu*kt+tf.transpose(Kt)*qu+tf.transpose(Kt)*Quu*kt
-              Kt_list.append(Kt)
-              kt_list.append(kt)
-              for t in range(max_len-1):
-                  Ft=tf.reshape(Ft_list[max_len-2-t],(sdim,sdim+adim))
-                  Ct=tf.reshape(Ct_list[max_len-2-t],(sdim+adim,sdim+adim))
-                  ct=tf.reshape(ct_list[max_len-2-t],(-1,1))
-                  Qt=Ct+tf.matmul(tf.matmul(tf.transpose(Ft),Vt),Ft)
-                  qt=ct+tf.matmul(tf.transpose(Ft),vt)
-                  Qxx=Qt[:sdim,:sdim]
-                  Qux=Qt[sdim:,:sdim]
-                  Quu=Qt[sdim:,sdim:][0][0]
-                  Qxu=Qt[:sdim,sdim:]
-                  qu=qt[sdim:,][0][0]
-                  qx=qt[:sdim,]
-                  Kt=(-1.0)/Quu*Qux
-                  kt=(-1.0)/Quu*qu
-                  Vt=Qxx+tf.matmul(Qxu,Kt)+tf.matmul(tf.transpose(Kt),Qux)+tf.matmul(tf.transpose(Kt)*Quu,Kt)
-                  vt=qx+Qxu*kt+tf.transpose(Kt)*qu+tf.transpose(Kt)*Quu*kt
-                  Kt_list.append(Kt)
-                  kt_list.append(kt)
+              Kt_list=tf.concat([Kt_list,tf.reshape(Kt,(1,1,-1))],axis=0)
+              kt_list=tf.concat([kt_list,tf.reshape(kt,(1,-1))],axis=0)
+          return Kt_list,kt_list
+
+      @tf.function
+      def find_action(self,Kt_list,kt_list,max_list,max_len):
+          max_list_new=[]
+          e=max_list[0]
+          new_action=self.beta*kt_list[0]+e[2]
+          if tf.abs(new_action-1.0)<tf.abs(new_action):
+              new_action=tf.constant(1.0,tf.float32)
+          else:
+              new_action=tf.constant(0.0,tf.float32)
+          s_a=tf.concat([tf.reshape(tf.cast(e[0],tf.float32),(-1,)),tf.reshape(new_action,(-1,))],axis=0)
+          max_list_new.append([e[0],self.fun([s_a])[0],new_action])#new_next_state
+          #按新的动作，调整样本状态
+          for t in range(max_len-1):
+              now_s=max_list[t+1]
+              last_s=max_list_new[t]
+              dx=tf.reshape(last_s[1]-tf.cast(now_s[0],tf.float32),(-1,1))
+              new_action=(tf.matmul(Kt_list[t+1],dx)+self.beta*kt_list[t+1]+now_s[2])[0][0]
+              if  tf.abs(new_action-1.0)<tf.abs(new_action):
+                  new_action=tf.constant(1.0,tf.float32)
+              else:
+                  new_action=tf.constant(0.0,tf.float32)
+              s_a=tf.concat([tf.reshape(tf.cast(now_s[0],tf.float32),(-1,)),tf.reshape(new_action,(-1,))],axis=0)
+              max_list_new.append([now_s[0],self.fun([s_a])[0],new_action])#new_next_state
+          return max_list_new
+
+      #对当前state，plan出最大reward的动作
+      def plan_action(self,state_now=[]):
+          sdim=4
+          adim=1
+          max_list,max_len,max_value=self.max_sample_trace(state=state_now)
+          if max_len>self.T:
+             max_list=max_list[:self.T]
+             max_len=self.T
+          for _ in range(8):
+              state_action=[]
+              for e in max_list:
+                  s=tf.cast(e[0],tf.float32)
+                  a=tf.reshape(tf.constant(e[2],tf.float32),(-1,))
+                  state_action.append(tf.concat([s,a],axis=0))
+              #jacobian,hessian速度慢转换为静态图以后速度会加快很多
+              Ct_list=self.hessian_matrix(self.reward_fun,state_action)
+              ct_list=self.jacobian_matrix(self.reward_fun,state_action)
+              Ft_list=self.jacobian_matrix(self.fun,state_action)
+              Kt_list,kt_list=self.back(Ct_list,ct_list,Ft_list,max_len,sdim,adim)
+              Kt_list=list(Kt_list)
+              kt_list=list(kt_list)
               Kt_list.reverse() #1...T
               kt_list.reverse()
-
               #修正得到新的state和新的action
               #当t==0
-              max_list_new=[]
-              e=max_list[0]
-              new_action=self.beta*kt_list[0]+tf.constant(e[2],tf.float32)
-              if np.abs(new_action-1.0)<np.abs(new_action):
-                 new_action=1
-              else:
-                 new_action=0
-              s_a=tf.constant(list(e[0])+list([new_action]),tf.float32)
-              max_list_new.append([e[0],self.fun([s_a])[0],new_action])#new_next_state
-              #按新的动作，调整样本状态
-              for t in range(max_len-1):
-                  now_s=max_list[t+1]
-                  last_s=max_list_new[t]
-                  dx=tf.reshape(tf.constant(last_s[1]-now_s[0],tf.float32),(-1,1))
-                  new_action=(tf.matmul(Kt_list[t+1],dx)+self.beta*kt_list[t+1]+now_s[2]).numpy()[0][0]
-                  if  np.abs(new_action-1.0)<np.abs(new_action):
-                      new_action=tf.constant(1.0,tf.float32)
-                  else:
-                      new_action=tf.constant(0.0,tf.float32)
-                  s_a=tf.constant(list(now_s[0])+list([new_action.numpy()]),tf.float32)
-                  max_list_new.append([now_s[0],self.fun([s_a])[0],new_action])#new_next_state
-              max_list=max_list_new
-          action_max=max_list[0][2]
+              max_list=self.find_action(Kt_list,kt_list,max_list,max_len)
+          action_max=max_list[0][2].numpy()
           return action_max
 
       def train_iLQR(self):
@@ -361,11 +372,11 @@ class iLQR():
           state_now = self.env.env.reset()
           d=0
           while i<1000000:
-                # self.env.render()
+                self.env.env.render()
                 if i!=0 and i%self.N==0:
                    self.function_train()#训练st+1=f(st,at)
                 action=self.plan_action(state_now)
-                state_next,reward,done,info=self.env.env.step(action)
+                state_next,reward,done,info=self.env.env.step(int(action))
                 if done:
                    if self.sample.__len__()>=self.N_sample:#buffer满腾出空间，补充新样本
                        for e in range(self.N_sample_remove):
