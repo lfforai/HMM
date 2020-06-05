@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 #理想滤波器章节，视窗函数曲线图
-def paint_time(func,len,range_x,text="",index=1,pltopen=False):
+def paint_time(func,len,range_x,text="",index=1,pltopen=True):
     if len%2==0:
        pass
     else:
@@ -28,8 +28,7 @@ def paint_scatter(x,y,index=1):
 #一、矩形视窗，参数T=0.5
 #rectangle
 #时域
-T=20
-index=1
+T=2
 len=500
 range_x=5
 range_fre=10
@@ -41,6 +40,7 @@ def rectangle_time_fun(x,T_in=T):
         else:
            result.append(1)
     return result
+index=1
 paint_time(rectangle_time_fun,len,range_x,"rectangle_time",index)
 #频谱
 def rectangle_fre_fun(x,T_in=T):#当T=0.5时候等于np.sinc
@@ -126,7 +126,7 @@ def Hanning_fre_fun(x,T_in=T):#当T=0.5时候等于np.sinc
     result=[]
     for e  in  x:
         if e==0:
-           result.append(1/(1-np.power(2*T_in*e,2.0)))
+           result.append(T/(1-np.power(2*T_in*e,2.0)))
         else:
            #方法1
            # result.append(0.5*rectangle_fre_fun(list([e]),T_in)[0]+0.25*rectangle_fre_fun(list([e-1/(2*T_in)]),T_in)[0]+0.25*rectangle_fre_fun(list([e+1/(2*T_in)]),T_in)[0])
@@ -143,7 +143,6 @@ y=[0,0]
 #五、汗明视窗，参数T=0.5
 #Hamming
 #时域
-beta=150.0 #4-7范围
 def Hamming_time_fun(x,T_in=T):
     result=[]
     for e  in  x:
@@ -159,12 +158,12 @@ def Hamming_fre_fun(x,T_in=T):#当T=0.5时候等于np.sinc
     result=[]
     for e  in  x:
         if e==0:
-            result.append(2*T_in*(0.54-0.08*np.power(2*T_in*T_in,2))/(1-np.power(2*T_in*e,2)))
+            result.append(2*T_in*(0.54-0.08*np.power(2*T_in*e,2))/(1-np.power(2*T_in*e,2)))
         else:
             #方法1
             # result.append(0.5*rectangle_fre_fun(list([e]),T_in)[0]+0.25*rectangle_fre_fun(list([e-1/(2*T_in)]),T_in)[0]+0.25*rectangle_fre_fun(list([e+1/(2*T_in)]),T_in)[0])
             #方法2,简化
-            result.append(np.sin(2*np.pi*e*T_in)/(np.pi*e)*(0.54-0.08*np.power(2*T_in*T_in,2))/(1-np.power(2*T_in*e,2)))
+            result.append(np.sin(2*np.pi*e*T_in)/(np.pi*e)*(0.54-0.08*np.power(2*T_in*e,2))/(1-np.power(2*T_in*e,2)))
     return result
 index=1+index
 paint_time(Hamming_fre_fun,len,range_fre,"Hamming_fre",index)
