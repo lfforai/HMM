@@ -28,7 +28,7 @@ def paint_scatter(x,y,index=1):
 #一、矩形视窗，参数T=0.5
 #rectangle
 #时域
-T=0.5
+T=20
 index=1
 len=500
 range_x=5
@@ -61,7 +61,6 @@ paint_time(rectangle_fre_fun,len,range_fre,"rectangle_fre",index)
 #二、矩形视窗，参数T=0.5
 #triangle
 #时域
-T=20.0
 def triangle_time_fun(x,T_in=T):
     result=[]
     for e  in  x:
@@ -87,7 +86,6 @@ paint_time(triangle_fre_fun,len,range_fre,"tectangle_fre",index)
 #三、钟型视窗，参数T=0.5
 # Bell
 #时域
-T=1.0
 beta=150.0 #4-7范围
 def Bell_time_fun(x,T_in=T,beta=beta):
     result=[]
@@ -112,7 +110,6 @@ paint_time(Bell_fre_fun,len,range_fre,"bell_fre",index)
 #四、哈宁视窗，参数T=0.5
 #Hanning
 #时域
-T=1.0
 beta=150.0 #4-7范围
 def Hanning_time_fun(x,T_in=T):
     result=[]
@@ -146,7 +143,6 @@ y=[0,0]
 #五、汗明视窗，参数T=0.5
 #Hamming
 #时域
-T=1.0
 beta=150.0 #4-7范围
 def Hamming_time_fun(x,T_in=T):
     result=[]
@@ -179,7 +175,6 @@ y=[0,0]
 
 #五、帕曾视窗，参数T=0.5
 #时域
-T=1.0
 beta=150.0 #4-7范围
 def Pz_time_fun(x,T_in=T):
     result=[]
@@ -215,7 +210,6 @@ y=[0,0]
 
 #六、丹尼尔视窗，参数T=0.5
 #时域
-T=1.0
 beta=150.0 #4-7范围
 def dne_time_fun(x,T_in=T):
     result=[]
@@ -247,7 +241,6 @@ y=[0,0]
 
 #七、blackman视窗，参数T=0.5
 #时域
-T=1.0
 beta=150.0 #4-7范围
 def blackman_time_fun(x,T_in=T):
     result=[]
@@ -277,7 +270,6 @@ y=[0,0]
 
 #八、Kaiser视窗，参数T=0.5
 #时域
-T=1.0
 beta=150.0 #4-7范围
 def blackman_time_fun(x,T_in=T):
     result=[]
@@ -347,6 +339,7 @@ def add_windows_in_time(func,win,len,range_x,text="",index=1):
     y=y*y_win
     # plt.savefig("./pitcture/"+text+".jpg")
     return np.array(y),np.array(x),dx
+
 #三角时窗
 index=index+1
 y_sinc,x,dx=add_windows_in_time(np.sinc,triangle_time_fun,len,range_x,"",index)
