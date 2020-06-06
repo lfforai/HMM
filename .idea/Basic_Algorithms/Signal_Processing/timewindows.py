@@ -19,6 +19,7 @@ def paint_time(func,len,range_x,text="",index=1,pltopen=True):
         plt.title(text)
         plt.plot(x, y)
     plt.savefig("./pitcture/"+text+".jpg")
+    plt.close(index)
     return np.array(y),np.array(x),dx
 
 def paint_scatter(x,y,index=1):
@@ -28,9 +29,9 @@ def paint_scatter(x,y,index=1):
 #一、矩形视窗，参数T=0.5
 #rectangle
 #时域
-T=2
-len=500
-range_x=5
+T=5
+len=1000
+range_x=10
 range_fre=10
 def rectangle_time_fun(x,T_in=T):
     result=[]
@@ -295,16 +296,86 @@ fN=[-1.0/((len+1)*dx),1.0/((len+1)*dx)]
 y=[0,0]
 # # plt.show()
 
-#用矩形时窗对原信号进行加窗
-len=1000
-range_x=40
+# 九、四个理想滤波器图像
+len=500
+range_x=10
 index=index+1
-y_sinc,x,dx=paint_time(np.sinc,len,range_x,"sinc",index)
+#理想滤波器
+f1=1.0
+f2=2.5
+range_s=4
+#理想低通滤波器
+def lowpass_fre_fun(x,f1=f1,range_s=range_s):
+    result=[]
+    for e  in  x:
+        if np.abs(e)<f1:
+            result.append(1.0)
+        else:
+            result.append(0.0)
+    return result
+
+#理想高通滤波器
+def highpass_fre_fun(x,f1=f1,range_s=range_s):
+    result=[]
+    for e  in  x:
+        if np.abs(e)>range_s:
+            result.append(0.0)
+        elif np.abs(e)<=range_s and np.abs(e)>f1:
+            result.append(1.0)
+        else:
+            result.append(0.0)
+    return result
+#理想带通滤波器
+def band_fre_fun(x,f1=f1,f2=f2,range_s=range_s):
+    result=[]
+    for e  in  x:
+        if np.abs(e)<=f2 and np.abs(e)>=f1:
+            result.append(1.0)
+        else:
+            result.append(0.0)
+    return result
+
+def band_time_fun(x,f1=f1,f2=f2,range_s=range_s):
+    result=[]
+    for e in x:
+        if e==0:
+          result.append(2.0*(f2-f1))
+        else:
+           result.append(2*np.sin((f2-f1)*np.pi*e)*np.cos(np.pi*(f1+f2)*e)/(np.pi*e))
+    return np.array(result)
+#理想阻带滤波器
+def stopband_fre_fun(x,f1=f1,f2=f2,range_s=range_s):
+    result=[]
+    for e  in  x:
+        if np.abs(e)<f1:
+            result.append(1.0)
+        elif np.abs(e)<range_s and np.abs(e)>f2:
+            result.append(1.0)
+        else:
+            result.append(0.0)
+    return result
+#绘制频谱上的函数图
+plotopen=True
+index=index+1
+y_low_time,x,dx=paint_time(lowpass_fre_fun,len,range_x,"low_pass_fre",index,plotopen)
+index=index+1
+y_high_time,x,dx=paint_time(highpass_fre_fun,len,range_x,"high_pass_fre",index,plotopen)
+index=index+1
+y_band_time,x,dx=paint_time(band_fre_fun,len,range_x,"band_pass_fre",index,plotopen)
+index=index+1
+y_stopband_time,x,dx=paint_time(stopband_fre_fun,len,range_x,"stopband_pass_fre",index,plotopen)
+#绘制频域上的函数图
+index=index+1
+y_sinc,x,dx=paint_time(np.sinc,len,range_x,"low_pass_time",index,True)
+index=index+1
+y_band,x,dx=paint_time(band_time_fun,len,range_x,"band_pass_time",index,True)
+
+
 #计算离散信号下的连续频谱函数
-def fre(y_time,x,dx,fre_len,range_fre,text,index):
+def fre(y_time,x,dx,fre_len,range_fre,text,index,fltopen=True):
     #x是在时域上离散采样序列，dx时时序的采样间隔
     #range_fre是频域上的范围
-    print("在频域上的周期:",1/dx)
+    print(text+"在频域上的周期:",1/dx)
     s=[]
     d_fre=2*range_fre/fre_len
     for i in range(fre_len+1):
@@ -318,10 +389,14 @@ def fre(y_time,x,dx,fre_len,range_fre,text,index):
     plt.figure(index) # 创建图表1
     plt.title(text)
     plt.plot(s,fre_y)
+    plt.savefig("./pitcture/"+text+".jpg")
 index=index+1
-fre(y_sinc,x,dx,2000,10,"windows_Of_rectangle_to_sinc_fre",index)
+fre(y_sinc,x,dx,2000,10,"windows_Of_rectangle_to_lowpass_fre",index)
+index=index+1
+fre(y_band,x,dx,2000,10,"windows_Of_rectangle_to_band_fre",index)
 
-#使用其他窗口对原理想信号进行加窗
+
+#十、使用其他窗口对原理想信号进行加窗
 def add_windows_in_time(func,win,len,range_x,text="",index=1):
     if len%2==0:
         pass
@@ -339,14 +414,34 @@ def add_windows_in_time(func,win,len,range_x,text="",index=1):
     # plt.savefig("./pitcture/"+text+".jpg")
     return np.array(y),np.array(x),dx
 
-#三角时窗
+#三角时窗对低筒滤波器加窗
 index=index+1
 y_sinc,x,dx=add_windows_in_time(np.sinc,triangle_time_fun,len,range_x,"",index)
-fre(y_sinc,x,dx,2000,10,"windows_Of_tectangle_to_sinc_fre",index)
+fre(y_sinc,x,dx,2000,10,"windows_Of_tectangle_to_lowpass_fre",index)
 
-#blackman时窗
+#blackman时窗对低通滤波器加窗
 index=index+1
 y_sinc,x,dx=add_windows_in_time(np.sinc,blackman_time_fun,len,range_x,"",index)
-fre(y_sinc,x,dx,2000,10,"windows_Of_blackman_time_fun_to_sinc_fre",index)
+fre(y_sinc,x,dx,2000,10,"windows_Of_blackman_to_lowpass_fre",index)
+
+#dan时窗对带通滤波器加窗
+index=index+1
+y_sinc,x,dx=add_windows_in_time(np.sinc,dne_time_fun,len,range_x,"",index)
+fre(y_sinc,x,dx,2000,10,"windows_Of_dne_to_lowpass_fre",index)
+
+#三角时窗对带通滤波器加窗
+index=index+1
+y_band,x,dx=add_windows_in_time(band_time_fun,triangle_time_fun,len,range_x,"",index)
+fre(y_band,x,dx,2000,10,"windows_Of_tectangle_to_band_fre",index)
+
+#blackman时窗对带通滤波器加窗
+index=index+1
+y_band,x,dx=add_windows_in_time(band_time_fun,blackman_time_fun,len,range_x,"",index)
+fre(y_band,x,dx,2000,10,"windows_Of_blackman_to_band_fre",index)
+
+#dan时窗对带通滤波器加窗
+index=index+1
+y_band,x,dx=add_windows_in_time(band_time_fun,dne_time_fun,len,range_x,"",index)
+fre(y_band,x,dx,2000,10,"windows_Of_dne_to_band_fre",index)
 plt.show()
 
