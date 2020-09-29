@@ -23,15 +23,15 @@ def paint_time(func,len,range_x,text="",index=1,pltopen=True):
     return np.array(y),np.array(x),dx
 
 def paint_scatter(x,y,index=1):
-    plt.figure(index) # 创建图表1
+    plt.figure(index) # 创建图np.sinc表1
     plt.scatter(x,y)
 
 #一、矩形视窗，参数T=0.5
 #rectangle
 #时域
-T=5
-len=1000
-range_x=10
+T=25
+len=500
+range_x=250
 range_fre=10
 def rectangle_time_fun(x,T_in=T):
     result=[]
@@ -443,5 +443,26 @@ fre(y_band,x,dx,2000,10,"windows_Of_blackman_to_band_fre",index)
 index=index+1
 y_band,x,dx=add_windows_in_time(band_time_fun,dne_time_fun,len,range_x,"",index)
 fre(y_band,x,dx,2000,10,"windows_Of_dne_to_band_fre",index)
+print(10.0*np.log10(np.power(10.0,5)))
+
+#Cauchy序列
+x1=1
+x2=0
+chayi=[]
+for e in range(10000):
+    x2=x1/2+1/x1
+    if e<100:
+       chayi.append(x2-x1)
+    x1=x2
+index=index+1
+plt.figure(index) # 创建图表1
+plt.title("Cauchy")
+plt.plot(range(100), chayi)
+print(x2)
+print(np.sqrt(2.0))
 plt.show()
+
+
+
+
 
